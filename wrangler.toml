@@ -1,0 +1,27 @@
+# Cobra on NEAR · voice-to-invoice Telegram bot; clients pay in any crypto, freelancers receive USDC on NEAR (NEAR Intents 1Click).
+# Secrets (wrangler secret put): BOT_TOKEN, WEBHOOK_SECRET. Optional: ONECLICK_API_KEY (partner key, lower fees).
+name = "cobra-near"
+main = "src/worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+preview_urls = false
+
+[vars]
+PUBLIC_URL = "https://cobra-near.ancient-shape-040f.workers.dev"   # this Worker's URL, used in payment links
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cobra-near"
+database_id = "178fbd67-b246-43a7-8500-6248c7d615d7"
+migrations_dir = "migrations"
+
+[ai]
+binding = "AI"  # Workers AI: Whisper (speech to text) and Llama (understanding)
+
+# Clock: the shared ribera-reloj Worker calls POST /tick every minute through a service binding
+# (the free plan allows only 5 Cron triggers per account). With your own account, add instead:
+# [triggers]
+# crons = ["* * * * *"]
+
+[observability]
+enabled = true

@@ -1,0 +1,15 @@
+{
+  "name": "cobra-near",
+  "version": "0.1.0",
+  "description": "Cobra on NEAR: talk to Telegram, your clients pay in any crypto on any chain, you receive USDC on NEAR via NEAR Intents.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "logs": "wrangler tail",
+    "db:migrate": "wrangler d1 migrations apply cobra-near --remote"
+  }
+}
