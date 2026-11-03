@@ -9,6 +9,7 @@ import { createPayments, PayError } from '../src/payments.js';
 import { budgetedAi, cleanEmail, normalizeDraft } from '../src/ai.js';
 import { verifyInitData, toCsv, toRow } from '../src/webapp.js';
 import worker from '../src/worker.js';
+import { createMezo, formatUnits, taggedAmount, transferData } from '../src/mezo.js';
 
 const T0 = Date.UTC(2026, 10, 3, 10, 0); // 3 Nov 2026
 const MIN = 60_000;
@@ -217,7 +218,7 @@ test('voice/text → draft → asks where to get paid once → payment link to s
   const send = s.buttons().find((b) => b.callback_data.startsWith('send:'));
   await s.tap(send.callback_data);
   assert.match(s.last().text, /Dónde quieres <b>cobrar/);
-  assert.deepEqual(s.buttons().map((b) => b.text), ['USDC · NEAR', 'USDC · Arbitrum', 'BCH · Bitcoin Cash']);
+  assert.deepEqual(s.buttons().map((b) => b.text), ['USDC · NEAR', 'USDC · Arbitrum', 'BCH · Bitcoin Cash', 'MUSD · Mezo']);
   assert.equal(await s.db.invoiceById(1), null, 'nothing created yet');
   await s.tap(s.buttons()[0].callback_data);
   assert.match(s.last().text, /cuenta de NEAR/);
@@ -480,4 +481,78 @@ test('settings: language, currency and where I get paid (NEAR, Arbitrum, BCH)', 
   assert.match(s.last().text, /Get paid in: USDC · NEAR · <code>marta.near<\/code>/);
   await s.msg('❓ How it works');
   assert.match(s.last().text, /you receive USDC on NEAR/);
+});
+
+// --- Mezo: MUSD paid directly ---
+
+test('Mezo helpers: exact tagged amounts, formatting, ERC-20 calldata', () => {
+  const wei = taggedAmount('11200000', 7); // 11.20 USDC-equivalent, invoice 7
+  assert.equal(wei, '11200000000000000007');
+  assert.equal(formatUnits(wei), '11.200000000000000007');
+  assert.equal(formatUnits('5000000000000000000'), '5');
+  assert.equal(transferData('0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c', 1),
+    '0xa9059cbb0000000000000000000000005a0b54d5dc17e0aadc383d2db43b0a0d3e029c4c0000000000000000000000000000000000000000000000000000000000000001');
+});
+
+test('Mezo: findTransfer scans in ranges and matches the exact amount to the freelancer', async () => {
+  const calls = [];
+  const fn = async (_url, init) => {
+    const { method, params } = JSON.parse(init.body);
+    calls.push({ method, params });
+    if (method === 'eth_blockNumber') return Response.json({ result: '0x2710' }); // 10000
+    const { fromBlock, topics } = params[0];
+    assert.equal(topics[2], '0x0000000000000000000000005a0b54d5dc17e0aadc383d2db43b0a0d3e029c4c');
+    const logs = fromBlock === '0x1388' ? [ // 5000
+      { data: '0x' + (11200000000000000006n).toString(16), transactionHash: '0xother', blockNumber: '0x1390' },
+      { data: '0x' + (11200000000000000007n).toString(16), transactionHash: '0xmine', blockNumber: '0x1391' },
+    ] : [];
+    return Response.json({ result: logs });
+  };
+  const m = createMezo('testnet', fn);
+  const r = await m.findTransfer('0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c', '11200000000000000007', 0);
+  assert.deepEqual(r.found, { hash: '0xmine', block: 5009 });
+  assert.equal(calls.filter((c) => c.method === 'eth_getLogs').length, 2, 'two 5000-block ranges');
+  assert.equal(m.txUrl('0xmine'), 'https://explorer.test.mezo.org/tx/0xmine');
+  const none = await m.findTransfer('0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c', '1', 0, 1);
+  assert.equal(none.found, null);
+  assert.equal(none.scanned, 4999, 'resumes where it stopped');
+});
+
+test('Mezo invoices: the page offers MUSD direct, the chain is watched, the freelancer is told once', async () => {
+  const s = setup();
+  let transfers = [];
+  const mezo = {
+    net: { chainId: 31611, name: 'Mezo Testnet', rpc: 'https://rpc.test', explorer: 'https://explorer.test', musd: '0xMUSD' },
+    blockNumber: async () => 100,
+    async findTransfer(to, wei, from) {
+      const hit = transfers.find((x) => x.to === to && x.wei === wei && x.block >= from);
+      return { found: hit ? { hash: hit.hash, block: hit.block } : null, scanned: 200 };
+    },
+    txUrl: (h) => `https://explorer.test/tx/${h}`,
+  };
+  const payments = createPayments({ db: s.db, intents: s.intents, mezo, api: s.api, cfg: s.cfg, clock: () => T0 });
+  await s.msg('Factura a Marta 350 euros por el logo');
+  await s.tap(s.buttons().find((b) => b.callback_data.startsWith('send:')).callback_data);
+  await s.tap(s.buttons().find((b) => b.callback_data.startsWith('po:mezo:')).callback_data);
+  assert.match(s.last().text, /dirección de <b>MUSD · Mezo/);
+  await s.msg('0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c');
+  const inv = await s.db.invoiceById(1);
+  assert.equal(inv.payout_chain, 'mezo');
+
+  await assert.rejects(payments.startPayment(inv, { assetId: USDC, refundTo: 'x.near' }), (e) => e.code === 'asset');
+  const d = await payments.startPayment(inv, { assetId: 'mezo:musd' });
+  assert.equal(d.address, '0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c', 'pay straight to the freelancer');
+  assert.equal(d.amountIn, '392.000000000000000001', '350 € → 392 MUSD, tagged with invoice 1');
+  assert.equal(d.direct.chainId, '0x7b7b');
+  assert.match(d.direct.data, /^0xa9059cbb/);
+  assert.equal((await payments.startPayment(inv, { assetId: 'mezo:musd' })).key, d.key, 'one watch per invoice');
+
+  const dep = await s.db.getDeposit(d.key);
+  assert.equal(await payments.refresh(dep), 'PENDING_DEPOSIT');
+  transfers = [{ to: d.address, wei: '392000000000000000001', hash: '0xabc', block: 250 }];
+  assert.equal(await payments.refresh(await s.db.getDeposit(d.key)), 'SUCCESS');
+  assert.match(s.last().text, /Marta García te ha pagado 350,00\s€/);
+  assert.match(s.last().text, /392.000000000000000001 MUSD · Mezo/);
+  assert.equal(s.buttons()[0].url, 'https://explorer.test/tx/0xabc');
+  assert.equal((await s.db.invoiceById(1)).status, 'PAID');
 });

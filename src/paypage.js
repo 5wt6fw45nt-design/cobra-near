@@ -96,6 +96,8 @@ export function payPage({ token, invoice, options, lang }) {
     <div class="addr" id="addr" title="copy"></div>
     <div class="hidden" id="memoBox"><div class="muted" id="lMemo" style="margin-top:10px"></div><div class="addr" id="memo"></div></div>
     <div class="muted" id="expires" style="margin-top:10px"></div>
+    <button class="hidden" id="wallet"></button>
+    <div class="err" id="walletErr"></div>
     <div class="status" id="statusBox" style="margin-top:14px"><span class="dot"></span><span id="statusText"></span></div>
     <button class="ghost" id="back"></button>
   </section>
@@ -114,8 +116,8 @@ const INV = ${embed(invoice)};
 const OPTIONS = ${embed(options)};
 const L = (navigator.language || '').startsWith('es') ? 'es' : ${embed(lang === 'es' ? 'es' : 'en')};
 const TX = {
-  en: { tagline: 'pay with any crypto', from: (f, n) => 'Invoice' + (n ? ' #' + n : '') + ' from ' + f, to: 'To', due: 'Due', receives: 'Received as', asset: 'Pay with', refund: 'Your address on that chain', refundHint: (c) => 'Only used to send money back if something goes wrong (or the excess, if you send more). Your ' + c + ' address.', nearHint: 'Your NEAR account, e.g. you.near', go: 'Get payment address', send: 'Send exactly', to2: 'To this address (tap to copy)', memo: 'Memo / tag (required)', expires: (m) => 'This address waits for your payment ' + m + ' min. After that, start again.', waiting: 'Waiting for your payment…', known: 'Payment seen, confirming…', processing: 'Payment received, converting…', incomplete: 'Less than the amount arrived. Send the rest to the same address.', success: 'Paid', refunded: 'The payment was refunded to your address.', failed: 'Something failed; your funds are refunded to your address.', back: 'Pay with something else', copied: 'Copied', paidTitle: 'Invoice paid', thanks: 'Thank you!', seeTx: 'See the transaction', closed: 'This invoice is no longer open.', errAsset: 'Choose what you pay with.', errRefund: 'Write your address on that chain.', errGeneric: 'That did not work. Check the address and try again.', errLimit: 'Too many attempts for this invoice. Ask for a new link.', foot: 'Powered by NEAR Intents · Cobra never holds funds' },
-  es: { tagline: 'paga con cualquier cripto', from: (f, n) => 'Factura' + (n ? ' n.º ' + n : '') + ' de ' + f, to: 'Para', due: 'Vence', receives: 'Se recibe como', asset: 'Pagar con', refund: 'Tu dirección en esa red', refundHint: (c) => 'Solo se usa para devolverte el dinero si algo falla (o lo que sobre, si mandas de más). Tu dirección de ' + c + '.', nearHint: 'Tu cuenta de NEAR, por ejemplo tu.near', go: 'Obtener dirección de pago', send: 'Envía exactamente', to2: 'A esta dirección (toca para copiar)', memo: 'Memo / etiqueta (obligatorio)', expires: (m) => 'Esta dirección espera tu pago ' + m + ' min. Después, vuelve a empezar.', waiting: 'Esperando tu pago…', known: 'Pago visto, confirmando…', processing: 'Pago recibido, convirtiendo…', incomplete: 'Ha llegado menos del importe. Manda el resto a la misma dirección.', success: 'Pagado', refunded: 'El pago se ha devuelto a tu dirección.', failed: 'Algo ha fallado; tus fondos se devuelven a tu dirección.', back: 'Pagar con otra cosa', copied: 'Copiado', paidTitle: 'Factura pagada', thanks: '¡Gracias!', seeTx: 'Ver la transacción', closed: 'Esta factura ya no está abierta.', errAsset: 'Elige con qué pagas.', errRefund: 'Escribe tu dirección en esa red.', errGeneric: 'No ha funcionado. Revisa la dirección y vuelve a intentarlo.', errLimit: 'Demasiados intentos para esta factura. Pide un enlace nuevo.', foot: 'Funciona con NEAR Intents · Cobra nunca toca los fondos' },
+  en: { tagline: 'pay with any crypto', from: (f, n) => 'Invoice' + (n ? ' #' + n : '') + ' from ' + f, to: 'To', due: 'Due', receives: 'Received as', asset: 'Pay with', refund: 'Your address on that chain', refundHint: (c) => 'Only used to send money back if something goes wrong (or the excess, if you send more). Your ' + c + ' address.', nearHint: 'Your NEAR account, e.g. you.near', go: 'Get payment address', send: 'Send exactly', to2: 'To this address (tap to copy)', memo: 'Memo / tag (required)', expires: (m) => 'This address waits for your payment ' + m + ' min. After that, start again.', waiting: 'Waiting for your payment…', known: 'Payment seen, confirming…', processing: 'Payment received, converting…', incomplete: 'Less than the amount arrived. Send the rest to the same address.', success: 'Paid', refunded: 'The payment was refunded to your address.', failed: 'Something failed; your funds are refunded to your address.', back: 'Pay with something else', copied: 'Copied', paidTitle: 'Invoice paid', thanks: 'Thank you!', seeTx: 'See the transaction', closed: 'This invoice is no longer open.', errAsset: 'Choose what you pay with.', errRefund: 'Write your address on that chain.', errGeneric: 'That did not work. Check the address and try again.', errLimit: 'Too many attempts for this invoice. Ask for a new link.', wallet: 'Pay with my wallet', noWallet: 'No wallet found here. Open this page in your wallet app (MetaMask, Rabby…) or send the amount by hand.', exact: 'Send exactly this amount: the last digits identify your invoice.', foot: 'Powered by NEAR Intents · Cobra never holds funds' },
+  es: { tagline: 'paga con cualquier cripto', from: (f, n) => 'Factura' + (n ? ' n.º ' + n : '') + ' de ' + f, to: 'Para', due: 'Vence', receives: 'Se recibe como', asset: 'Pagar con', refund: 'Tu dirección en esa red', refundHint: (c) => 'Solo se usa para devolverte el dinero si algo falla (o lo que sobre, si mandas de más). Tu dirección de ' + c + '.', nearHint: 'Tu cuenta de NEAR, por ejemplo tu.near', go: 'Obtener dirección de pago', send: 'Envía exactamente', to2: 'A esta dirección (toca para copiar)', memo: 'Memo / etiqueta (obligatorio)', expires: (m) => 'Esta dirección espera tu pago ' + m + ' min. Después, vuelve a empezar.', waiting: 'Esperando tu pago…', known: 'Pago visto, confirmando…', processing: 'Pago recibido, convirtiendo…', incomplete: 'Ha llegado menos del importe. Manda el resto a la misma dirección.', success: 'Pagado', refunded: 'El pago se ha devuelto a tu dirección.', failed: 'Algo ha fallado; tus fondos se devuelven a tu dirección.', back: 'Pagar con otra cosa', copied: 'Copiado', paidTitle: 'Factura pagada', thanks: '¡Gracias!', seeTx: 'Ver la transacción', closed: 'Esta factura ya no está abierta.', errAsset: 'Elige con qué pagas.', errRefund: 'Escribe tu dirección en esa red.', errGeneric: 'No ha funcionado. Revisa la dirección y vuelve a intentarlo.', errLimit: 'Demasiados intentos para esta factura. Pide un enlace nuevo.', wallet: 'Pagar con mi cartera', noWallet: 'No hay cartera aquí. Abre esta página en la app de tu cartera (MetaMask, Rabby…) o manda el importe a mano.', exact: 'Envía exactamente esta cantidad: los últimos decimales identifican tu factura.', foot: 'Funciona con NEAR Intents · Cobra nunca toca los fondos' },
 }[L];
 const $ = (id) => document.getElementById(id);
 const fmt = (n, c) => new Intl.NumberFormat(L === 'es' ? 'es-ES' : 'en-US', { style: 'currency', currency: c }).format(n);
@@ -133,7 +135,11 @@ $('lAsset').textContent = TX.asset; $('lRefund').textContent = TX.refund; $('go'
 $('lSend').textContent = TX.send; $('lTo').textContent = TX.to2; $('lMemo').textContent = TX.memo; $('foot').textContent = TX.foot;
 for (const o of OPTIONS) { const el = document.createElement('option'); el.value = o.assetId; el.textContent = o.symbol + ' · ' + o.chainName; $('asset').append(el); }
 const current = () => OPTIONS.find((o) => o.assetId === $('asset').value);
-const hint = () => { const o = current(); $('hRefund').textContent = o?.chain === 'near' ? TX.nearHint : TX.refundHint(o ? o.chainName : ''); };
+const hint = () => {
+  const o = current();
+  for (const id of ['lRefund', 'refund', 'hRefund']) $(id).classList.toggle('hidden', Boolean(o?.direct)); // direct MUSD: nothing to refund
+  $('hRefund').textContent = o?.chain === 'near' ? TX.nearHint : TX.refundHint(o ? o.chainName : '');
+};
 $('asset').onchange = hint; hint();
 
 let watching = null;
@@ -166,11 +172,36 @@ function showDeposit(d) {
   $('memoBox').classList.toggle('hidden', !d.memo);
   if (d.memo) $('memo').textContent = d.memo;
   $('qr').innerHTML = '';
-  if (window.QRCode) new QRCode($('qr'), { text: d.address, width: 220, height: 220 });
-  $('expires').textContent = TX.expires(Math.max(1, Math.round((d.deadline - Date.now()) / 60000)));
+  // Direct MUSD: an EIP-681 link, so a wallet that scans it fills in token, network and exact amount
+  const qrText = d.direct ? 'ethereum:' + d.direct.token + '@' + parseInt(d.direct.chainId, 16) + '/transfer?address=' + d.address + '&uint256=' + d.direct.wei : d.address;
+  if (window.QRCode) new QRCode($('qr'), { text: qrText, width: 220, height: 220 });
+  $('expires').textContent = d.direct ? TX.exact : TX.expires(Math.max(1, Math.round((d.deadline - Date.now()) / 60000)));
+  $('wallet').classList.toggle('hidden', !d.direct);
+  $('back').classList.toggle('hidden', OPTIONS.length < 2);
+  if (d.direct) { $('wallet').textContent = TX.wallet; $('wallet').onclick = () => payWithWallet(d); }
   setStatus(d.status);
   clearInterval(watching);
-  watching = setInterval(() => poll(d.address), 5000);
+  watching = setInterval(() => poll(d.key), 5000);
+}
+
+/** MUSD transfer from the browser wallet: switch to (or add) the Mezo network, then send transfer(to, exact amount). */
+async function payWithWallet(d) {
+  $('walletErr').textContent = '';
+  const eth = window.ethereum;
+  if (!eth) return ($('walletErr').textContent = TX.noWallet);
+  try {
+    const [from] = await eth.request({ method: 'eth_requestAccounts' });
+    try {
+      await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: d.direct.chainId }] });
+    } catch (e) {
+      if (e.code !== 4902) throw e;
+      await eth.request({ method: 'wallet_addEthereumChain', params: [{ chainId: d.direct.chainId, chainName: d.direct.chainName, rpcUrls: [d.direct.rpc], blockExplorerUrls: [d.direct.explorer], nativeCurrency: { name: 'Bitcoin', symbol: 'BTC', decimals: 18 } }] });
+    }
+    await eth.request({ method: 'eth_sendTransaction', params: [{ from, to: d.direct.token, data: d.direct.data }] });
+    setStatus('KNOWN_DEPOSIT_TX');
+  } catch (e) {
+    $('walletErr').textContent = e?.message || TX.errGeneric;
+  }
 }
 
 async function poll(address) {
@@ -187,8 +218,8 @@ $('back').onclick = () => { clearInterval(watching); $('deposit').classList.add(
 $('go').onclick = async () => {
   $('err').textContent = '';
   if (!current()) return ($('err').textContent = TX.errAsset);
-  const refundTo = $('refund').value.trim();
-  if (refundTo.length < 2) return ($('err').textContent = TX.errRefund);
+  const refundTo = current().direct ? '-' : $('refund').value.trim();
+  if (refundTo.length < 1 || (!current().direct && refundTo.length < 2)) return ($('err').textContent = TX.errRefund);
   $('go').disabled = true;
   try {
     const r = await fetch('/pay/' + TOKEN + '/quote', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ assetId: current().assetId, refundTo }) });

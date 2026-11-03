@@ -5,6 +5,7 @@ import { createDb } from './db.js';
 import { createApi } from './telegram.js';
 import { createIntents, IntentsError } from './intents.js';
 import { createPayments, PayError } from './payments.js';
+import { createMezo, MUSD_ASSET } from './mezo.js';
 import { createBot } from './bot.js';
 import { budgetedAi } from './ai.js';
 import { MINI_APP } from './miniapp.js';
@@ -16,9 +17,10 @@ export function build(env, deps = {}) {
   const db = createDb(env.DB);
   const api = deps.api || createApi(cfg.token);
   const intents = deps.intents || createIntents(cfg.intents);
-  const payments = createPayments({ db, intents, api, cfg, clock: deps.clock });
+  const mezo = deps.mezo || createMezo(cfg.mezoNetwork);
+  const payments = createPayments({ db, intents, mezo, api, cfg, clock: deps.clock });
   const bot = createBot({ api, db, cfg, payments, intents, ai: budgetedAi(env.AI, db, cfg.aiCallsPerDay), clock: deps.clock });
-  return { cfg, db, api, intents, payments, bot };
+  return { cfg, db, api, intents, mezo, payments, bot };
 }
 
 const secretOk = (env, url) => env.WEBHOOK_SECRET && url.searchParams.get('secret') === env.WEBHOOK_SECRET;
@@ -28,13 +30,14 @@ const html = (body, status = 200) => new Response(body, { status, headers: { 'co
 async function handlePay(req, env, url, deps) {
   const [, , token, action] = url.pathname.split('/');
   if (!/^[A-Za-z0-9_-]{16,40}$/.test(token || '')) return html('Not found', 404);
-  const { db, intents, payments } = build(env, deps);
+  const { db, intents, mezo, payments } = build(env, deps);
   const inv = await db.invoiceByToken(token);
   if (!inv) return html('Not found', 404);
 
   if (!action && req.method === 'GET') {
     const owner = await db.getUser(inv.user_id);
-    const options = inv.status === 'SENT' ? await intents.payOptions().catch(() => []) : [];
+    const direct = [{ assetId: MUSD_ASSET, symbol: 'MUSD', chain: 'mezo', chainName: mezo.net.name, direct: true }];
+    const options = inv.status !== 'SENT' ? [] : inv.payout_chain === 'mezo' ? direct : await intents.payOptions().catch(() => []);
     return html(payPage({ token, invoice: publicInvoice(inv, owner), options, lang: owner?.lang }));
   }
 

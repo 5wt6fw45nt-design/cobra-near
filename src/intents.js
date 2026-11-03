@@ -11,13 +11,14 @@ export const PAYOUTS = {
   near: { asset: USDC, symbol: 'USDC', decimals: 6, stable: true, chainName: 'NEAR', example: 'marta.near' },
   arb: { asset: 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near', symbol: 'USDC', decimals: 6, stable: true, chainName: 'Arbitrum', example: '0x1234…abcd' },
   bch: { asset: 'nep141:bch.omft.near', symbol: 'BCH', decimals: 8, stable: false, chainName: 'Bitcoin Cash', example: 'bitcoincash:qp…' },
+  mezo: { direct: true, symbol: 'MUSD', decimals: 18, stable: true, chainName: 'Mezo', example: '0x1234…abcd' }, // paid directly, see mezo.js
 };
 
 /** Format check for a payout address (NEAR accounts are also checked on chain, see accountExists). */
 export function isPayoutAddress(chain, s) {
   const a = String(s || '').trim();
   if (chain === 'near') return isNearAccount(a);
-  if (chain === 'arb') return /^0x[0-9a-fA-F]{40}$/.test(a);
+  if (chain === 'arb' || chain === 'mezo') return /^0x[0-9a-fA-F]{40}$/.test(a);
   if (chain === 'bch') return /^(bitcoincash:)?[qp][02-9ac-hj-np-z]{41}$/.test(a.toLowerCase());
   return false;
 }
@@ -40,7 +41,7 @@ export const PAY_WITH = [
 
 export const CHAIN_NAMES = {
   near: 'NEAR', base: 'Base', arb: 'Arbitrum', sol: 'Solana', eth: 'Ethereum', tron: 'Tron', bsc: 'BNB Chain',
-  btc: 'Bitcoin', zec: 'Zcash', bch: 'Bitcoin Cash', ltc: 'Litecoin', doge: 'Dogecoin', xrp: 'XRP Ledger',
+  btc: 'Bitcoin', zec: 'Zcash', mezo: 'Mezo', bch: 'Bitcoin Cash', ltc: 'Litecoin', doge: 'Dogecoin', xrp: 'XRP Ledger',
 };
 
 const STABLE = new Set(['USDC', 'USDT']);
@@ -95,7 +96,7 @@ export function createIntents({ base, apiKey, rpc }, fetchFn = (...a) => fetch(.
   /** Invoice amount (cents in EUR or USD) → base units of the payout asset. Euros use the live EURe price, BCH its live price. */
   async function payoutUnits(cents, currency, chain = 'near') {
     const p = PAYOUTS[chain];
-    if (!p) throw new IntentsError(400, { message: `unknown payout chain ${chain}` });
+    if (!p || p.direct) throw new IntentsError(400, { message: `unknown payout chain ${chain}` });
     const list = await tokens();
     let usd = cents / 100;
     if (currency === 'EUR') {

@@ -11,6 +11,7 @@ export function loadConfig(vars = globalThis.process?.env ?? {}) {
       apiKey: env('ONECLICK_API_KEY', ''), // optional partner key: lower fees
       rpc: env('NEAR_RPC', 'https://free.rpc.fastnear.com'),
     },
+    mezoNetwork: env('MEZO_NETWORK', 'testnet'), // MUSD payouts: 'testnet' (free to demo) or 'mainnet'
     publicUrl: env('PUBLIC_URL', ''), // https://cobra-near.<you>.workers.dev, for payment links
     quoteMinutes: Number(env('QUOTE_MINUTES', 60)), // how long a deposit address waits for the client
     maxAudioSeconds: Number(env('MAX_AUDIO_SECONDS', 120)), // invoices are short; keeps the free Workers AI quota safe
