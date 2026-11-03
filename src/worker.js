@@ -4,9 +4,10 @@ import { loadConfig } from './config.js';
 import { createDb } from './db.js';
 import { createApi } from './telegram.js';
 import { createIntents, IntentsError } from './intents.js';
-import { createPayments, PayError } from './payments.js';
+import { createPayments, PayError, LN_ASSET } from './payments.js';
 import { createMezo, MUSD_ASSET } from './mezo.js';
 import { createConcordium, CCD_ASSET, parsePaymentHeader } from './concordium.js';
+import { createLightning } from './lightning.js';
 import { createBot } from './bot.js';
 import { budgetedAi } from './ai.js';
 import { MINI_APP } from './miniapp.js';
@@ -20,8 +21,9 @@ export function build(env, deps = {}) {
   const intents = deps.intents || createIntents(cfg.intents);
   const mezo = deps.mezo || createMezo(cfg.mezoNetwork);
   const concordium = deps.concordium || createConcordium(cfg.concordiumNetwork);
-  const payments = createPayments({ db, intents, mezo, concordium, api, cfg, clock: deps.clock });
-  const bot = createBot({ api, db, cfg, payments, intents, concordium, ai: budgetedAi(env.AI, db, cfg.aiCallsPerDay), clock: deps.clock });
+  const lightning = deps.lightning || createLightning();
+  const payments = createPayments({ db, intents, mezo, concordium, lightning, api, cfg, clock: deps.clock, cashuPay: deps.cashuPay });
+  const bot = createBot({ api, db, cfg, payments, intents, concordium, lightning, ai: budgetedAi(env.AI, db, cfg.aiCallsPerDay), clock: deps.clock });
   return { cfg, db, api, intents, mezo, concordium, payments, bot };
 }
 
@@ -88,6 +90,7 @@ async function handlePay(req, env, url, deps) {
     const direct = {
       mezo: [{ assetId: MUSD_ASSET, symbol: 'MUSD', chain: 'mezo', chainName: mezo.net.name, direct: true }],
       ccd: [{ assetId: CCD_ASSET, symbol: 'CCD', chain: 'ccd', chainName: concordium.net.name, direct: true }],
+      ln: [{ assetId: LN_ASSET, symbol: 'Lightning', chain: 'ln', chainName: 'Cashu ecash', direct: true }],
     }[inv.payout_chain];
     const options = inv.status !== 'SENT' ? [] : direct || await intents.payOptions().catch(() => []);
     const badge = await badgeOf(cfg, db, concordium);
@@ -104,6 +107,11 @@ async function handlePay(req, env, url, deps) {
       console.error('[quote]', e.message);
       return Response.json({ error: 'unavailable' }, { status: 503 });
     }
+  }
+
+  if (action === 'cashu' && req.method === 'POST') {
+    const body = await req.json().catch(() => ({}));
+    return Response.json(await payments.payCashu(inv, String(body.key || ''), String(body.token || '').slice(0, 20_000)));
   }
 
   if (action === 'status' && req.method === 'GET') {

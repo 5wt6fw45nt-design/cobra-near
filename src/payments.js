@@ -4,6 +4,10 @@
 import { CHAIN_NAMES } from './intents.js';
 import { MUSD_ASSET, taggedAmount, formatUnits, transferData } from './mezo.js';
 import { CCD_ASSET, taggedCcd, formatCcd } from './concordium.js';
+import { payWithToken } from './cashu.js';
+
+export const LN_ASSET = 'ln:bolt11';
+const LN_MINUTES = 50; // a fresh BOLT11 per attempt; wallets usually let them live an hour or more
 import { T } from './render.js';
 import { message } from './telegram.js';
 
@@ -22,7 +26,8 @@ const INCOMING = new Set(['KNOWN_DEPOSIT_TX', 'PROCESSING']);
 
 const DIRECT_DAYS = 30; // a direct payment has no deposit address to expire; watch the invoice this long
 
-export function createPayments({ db, intents, mezo, concordium, api, cfg, clock = Date.now }) {
+export function createPayments({ db, intents, mezo, concordium, lightning, api, cfg, clock = Date.now, cashuPay }) {
+  cashuPay ||= payWithToken;
   const notify = (userId, text, extra = {}) => api.call('sendMessage', message(userId, text, extra)).catch((e) => console.error('[notify]', e.message));
   const kb = (rows) => ({ reply_markup: { inline_keyboard: rows } });
 
@@ -63,6 +68,21 @@ export function createPayments({ db, intents, mezo, concordium, api, cfg, clock 
         return hit ? { hash: hit.hash, url: concordium.txUrl(hit.hash) } : null;
       },
     },
+    ln: {
+      asset: LN_ASSET, symbol: 'sats', minutes: LN_MINUTES,
+      async open(inv) {
+        const sats = await intents.satsFor(inv.amount_cents, inv.currency);
+        const { pr, verify } = await lightning.invoice(inv.payout_address, sats, `Cobra ${inv.number}: ${inv.description}`);
+        return { shown: String(sats), amount: String(sats), watch: { to: inv.payout_address, pr, verify } };
+      },
+      wallet: (q, inv) => ({
+        chainName: 'Lightning',
+        direct: { kind: 'ln', pr: q.pr, verify: Boolean(q.verify), cashu: `${cfg.publicUrl}/pay/${inv.pay_token}/cashu` },
+      }),
+      async find(_dep, q) {
+        return q.verify && await lightning.settled(q.verify) ? { hash: 'lightning', url: null } : null;
+      },
+    },
   };
   const directOf = (dep) => Object.values(DIRECT).find((x) => x.asset === dep.origin_asset);
 
@@ -82,12 +102,13 @@ export function createPayments({ db, intents, mezo, concordium, api, cfg, clock 
   async function startDirect(inv, assetId, now) {
     const x = DIRECT[inv.payout_chain];
     if (assetId !== x.asset) throw new PayError('asset');
-    const existing = (await db.depositsFor(inv.id)).find((d) => d.origin_asset === x.asset);
+    // One watch per invoice; Lightning gets a new BOLT11 when the last one is about to expire
+    const existing = (await db.depositsFor(inv.id)).find((d) => d.origin_asset === x.asset && d.status === 'PENDING_DEPOSIT' && d.deadline > now + 5 * 60_000);
     if (existing) return view(existing, inv);
     const o = await x.open(inv, now);
     const dep = {
-      address: `${x.asset}:${inv.id}`, memo: null, invoice_id: inv.id, origin_asset: x.asset, symbol: x.symbol, chain: inv.payout_chain, refund_to: '-',
-      amount_in: o.shown, amount_out: o.amount, quote: JSON.stringify({ direct: true, ...o.watch }), deadline: now + DIRECT_DAYS * 86_400_000, created_at: now,
+      address: x.minutes ? `${x.asset}:${inv.id}:${now}` : `${x.asset}:${inv.id}`, memo: null, invoice_id: inv.id, origin_asset: x.asset, symbol: x.symbol, chain: inv.payout_chain, refund_to: '-',
+      amount_in: o.shown, amount_out: o.amount, quote: JSON.stringify({ direct: true, ...o.watch }), deadline: now + (x.minutes ? x.minutes * 60_000 : DIRECT_DAYS * 86_400_000), created_at: now,
     };
     await db.addDeposit(dep);
     return view({ ...dep, status: 'PENDING_DEPOSIT' }, inv);
@@ -98,6 +119,19 @@ export function createPayments({ db, intents, mezo, concordium, api, cfg, clock 
   async function directStatus(dep) {
     const hit = await directOf(dep).find(dep, JSON.parse(dep.quote));
     return hit ? found(dep, hit) : { status: 'PENDING_DEPOSIT', swapDetails: {} };
+  }
+
+  /**
+   * Cashu: the client pastes an ecash token on the payment page; it is melted at its own mint into the freelancer's
+   * Lightning invoice for this attempt. Returns { paid, change, why } (change: a token to give back, if any).
+   */
+  async function payCashu(inv, key, token) {
+    const dep = key ? await db.getDeposit(key) : null;
+    if (!inv || inv.status !== 'SENT' || !dep || dep.invoice_id !== inv.id || dep.origin_asset !== LN_ASSET) return { paid: false, why: 'start the payment again' };
+    const q = JSON.parse(dep.quote);
+    const r = await cashuPay(token, q.pr);
+    if (r.paid) await apply(dep, { status: 'SUCCESS', swapDetails: { amountInFormatted: dep.amount_in, via: 'Cashu ecash', destinationChainTxHashes: [] } });
+    return { paid: r.paid, change: r.change || null, why: r.why || null };
   }
 
   /**
@@ -170,7 +204,7 @@ export function createPayments({ db, intents, mezo, concordium, api, cfg, clock 
     const u = await db.getUser(inv.user_id);
     const t = T(u?.lang);
     const sd = st.swapDetails || {};
-    const chain = CHAIN_NAMES[dep.chain] || dep.chain;
+    const chain = sd.via || CHAIN_NAMES[dep.chain] || dep.chain;
     const sentAmount = sd.amountInFormatted || sd.depositedAmountFormatted || dep.amount_in;
 
     if (status === 'SUCCESS') {
@@ -205,5 +239,5 @@ export function createPayments({ db, intents, mezo, concordium, api, cfg, clock 
     return list.length;
   }
 
-  return { startPayment, refresh, refreshInvoice, sweep, view, settleX402 };
+  return { startPayment, refresh, refreshInvoice, sweep, view, settleX402, payCashu };
 }

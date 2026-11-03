@@ -12,6 +12,8 @@ import { verifyInitData, toCsv, toRow } from '../src/webapp.js';
 import worker from '../src/worker.js';
 import { createMezo, formatUnits, taggedAmount, transferData } from '../src/mezo.js';
 import { createConcordium, formatCcd, taggedCcd, parsePaymentHeader } from '../src/concordium.js';
+import { createLightning, lnurlpUrl, bolt11Msat } from '../src/lightning.js';
+import { inspectToken, payWithToken } from '../src/cashu.js';
 
 const T0 = Date.UTC(2026, 10, 3, 10, 0); // 3 Nov 2026
 const MIN = 60_000;
@@ -220,7 +222,7 @@ test('voice/text → draft → asks where to get paid once → payment link to s
   const send = s.buttons().find((b) => b.callback_data.startsWith('send:'));
   await s.tap(send.callback_data);
   assert.match(s.last().text, /Dónde quieres <b>cobrar/);
-  assert.deepEqual(s.buttons().map((b) => b.text), ['USDC · NEAR', 'USDC · Arbitrum', 'BCH · Bitcoin Cash', 'MUSD · Mezo', 'CCD · Concordium']);
+  assert.deepEqual(s.buttons().map((b) => b.text), ['USDC · NEAR', 'USDC · Arbitrum', 'BCH · Bitcoin Cash', 'MUSD · Mezo', 'CCD · Concordium', 'sats · Lightning']);
   assert.equal(await s.db.invoiceById(1), null, 'nothing created yet');
   await s.tap(s.buttons()[0].callback_data);
   assert.match(s.last().text, /cuenta de NEAR/);
@@ -683,4 +685,121 @@ test('Agent Card: stored with the setup secret, served byte for byte for the on-
   const r = await (await call('/setup/agent-card?secret=S', { method: 'POST', body: card })).json();
   assert.equal(r.sha256, createHash('sha256').update(card).digest('hex'));
   assert.equal(await (await call('/.well-known/agent-card.json')).text(), card);
+});
+
+// --- Lightning address + Cashu ecash ---
+
+test('Lightning: address → LNURL-pay, BOLT11 amounts, the invoice must be for what we asked', async () => {
+  assert.equal(lnurlpUrl('Marta@Minibits.Cash'), 'https://minibits.cash/.well-known/lnurlp/marta');
+  assert.equal(lnurlpUrl('marta.near'), null);
+  assert.equal(bolt11Msat('lnbc2500u1pvjluez'), 250_000_000);
+  assert.equal(bolt11Msat('lnbc10n1abc'), 1_000);
+  assert.equal(bolt11Msat('lnbc1pvjluez'), null, 'no amount: not ours');
+  let pr = 'lnbc5000n1qqq';
+  const fn = async (url) => {
+    const u = new URL(url);
+    if (u.pathname === '/.well-known/lnurlp/marta') return Response.json({ tag: 'payRequest', callback: 'https://minibits.cash/cb/marta', minSendable: 1000, maxSendable: 1e10, commentAllowed: 10 });
+    if (u.pathname === '/cb/marta') return Response.json({ pr, verify: 'https://minibits.cash/verify/1', comment: u.searchParams.get('comment') });
+    if (u.pathname === '/verify/1') return Response.json({ status: 'OK', settled: true });
+    return Response.json({ status: 'ERROR', reason: 'nope' }, { status: 404 });
+  };
+  const ln = createLightning(fn);
+  assert.ok(await ln.resolve('marta@minibits.cash'));
+  assert.equal(await ln.resolve('nobody@minibits.cash'), null);
+  assert.deepEqual(await ln.invoice('marta@minibits.cash', 500), { pr, verify: 'https://minibits.cash/verify/1', msat: 500_000 });
+  assert.equal(await ln.settled('https://minibits.cash/verify/1'), true);
+  pr = 'lnbc9000n1qqq';
+  await assert.rejects(ln.invoice('marta@minibits.cash', 500), /another amount/);
+});
+
+/** A mint that pays any invoice with 2 sats of routing reserve; it fails on demand. */
+function fakeMintWallet({ fail = false, proofs }) {
+  const amt = (n) => ({ n, add: (o) => amt(n + o.n), toNumber: () => n, toString: () => String(n) });
+  const calls = [];
+  return {
+    calls,
+    make: () => ({
+      loadMint: async () => calls.push('load'),
+      decodeToken: () => ({ proofs }),
+      createMeltQuoteBolt11: async (pr) => { calls.push(['quote', pr]); return { quote: 'q1', amount: amt(bolt11Msat(pr) / 1000), fee_reserve: amt(2) }; },
+      send: async (need, held) => {
+        const total = held.reduce((s, p) => s + p.amount, 0);
+        return { send: [{ id: '009a1f293253e41e', amount: need.n, secret: 'send', C: '02' + 'c'.repeat(64) }], keep: total > need.n ? [{ id: '009a1f293253e41e', amount: total - need.n, secret: 'keep', C: '02' + 'd'.repeat(64) }] : [] };
+      },
+      meltProofsBolt11: async () => {
+        if (fail) throw new Error('Lightning payment failed');
+        return { quote: { state: 'PAID', payment_preimage: 'pre' }, change: [{ id: '009a1f293253e41e', amount: 1, secret: 'chg', C: '02' + 'e'.repeat(64) }] };
+      },
+    }),
+  };
+}
+
+test('Cashu: a token is melted into the invoice, change and failures go back to the client', async () => {
+  const { getEncodedToken } = await import('@cashu/cashu-ts');
+  const proofs = [{ id: '009a1f293253e41e', amount: 512, secret: 's1', C: '02' + 'a'.repeat(64) }];
+  const token = getEncodedToken({ mint: 'https://mint.test', unit: 'sat', proofs });
+  assert.deepEqual(inspectToken(token), { mint: 'https://mint.test', unit: 'sat', amount: 512 });
+  assert.equal(inspectToken('hello'), null);
+
+  const ok = fakeMintWallet({ proofs });
+  const r = await payWithToken(token, 'lnbc5000n1qqq', ok.make);
+  assert.equal(r.paid, true);
+  assert.equal(r.fee, 2);
+  assert.deepEqual(inspectToken(r.change), { mint: 'https://mint.test', unit: 'sat', amount: 11 }, '512 - 502 kept + 1 change');
+
+  const bad = fakeMintWallet({ proofs, fail: true });
+  const f = await payWithToken(token, 'lnbc5000n1qqq', bad.make);
+  assert.equal(f.paid, false);
+  assert.match(f.why, /failed/);
+  assert.equal(inspectToken(f.change).amount, 512, 'everything back');
+
+  const small = fakeMintWallet({ proofs });
+  const s = await payWithToken(token, 'lnbc6000n1qqq', small.make);
+  assert.equal(s.paid, false);
+  assert.match(s.why, /holds 512 sats, 602 needed/);
+  assert.equal(inspectToken(s.change).amount, 512);
+  assert.equal((await payWithToken('cashuBnope', 'lnbc1', ok.make)).why, 'not a Cashu token');
+});
+
+test('Lightning invoices: fresh BOLT11 per attempt, ecash pays it, the freelancer is told', async () => {
+  const s = setup();
+  const lightning = {
+    resolve: async (a) => (a === 'marta@minibits.cash' ? { tag: 'payRequest' } : null),
+    invoice: async (_a, sats) => ({ pr: `lnbc${sats * 10}n1qqq`, verify: null, msat: sats * 1000 }),
+    settled: async () => false,
+  };
+  s.intents.satsFor = async () => 5000;
+  const env = { DB: s.d1, BOT_TOKEN: 'T', PUBLIC_URL: 'https://cobra.test' };
+  let melted = null;
+  const deps = { intents: s.intents, api: s.api, lightning, clock: () => T0, cashuPay: async (token, pr) => { melted = { token, pr }; return { paid: true, change: 'cashuBchange' }; } };
+  const call = (path, init) => worker.fetch(new Request(`https://cobra.test${path}`, init), env, { waitUntil() {} }, deps);
+
+  const bot = createBot({ api: s.api, db: s.db, cfg: s.cfg, payments: s.payments, intents: s.intents, lightning, clock: () => T0, nlu: fakeNlu, token: () => 'tokLN0000000000000000001' });
+  const from = { id: s.ME, first_name: 'Augusto', language_code: 'es' };
+  const tap = (data) => bot.handleUpdate({ callback_query: { id: 'c', from, data, message: { message_id: 1, chat: { id: s.ME } } } });
+  await bot.handleUpdate({ message: { from, chat: { id: s.ME, type: 'private' }, text: 'Factura a Marta 350 euros por el logo' } });
+  await tap(s.buttons().find((b) => b.callback_data.startsWith('send:')).callback_data);
+  await tap('po:ln:1');
+  await bot.handleUpdate({ message: { from, chat: { id: s.ME, type: 'private' }, text: 'nobody@minibits.cash' } });
+  assert.match(s.last().text, /no parece una dirección de Lightning/);
+  await bot.handleUpdate({ message: { from, chat: { id: s.ME, type: 'private' }, text: 'Marta@Minibits.cash' } });
+  const inv = await s.db.invoiceById(1);
+  assert.equal(inv.payout_chain, 'ln');
+  assert.equal(inv.payout_address, 'marta@minibits.cash');
+
+  const page = await (await call(`/pay/${inv.pay_token}`)).text();
+  assert.match(page, /"symbol":"Lightning","chain":"ln"/);
+  const d = await (await call(`/pay/${inv.pay_token}/quote`, { method: 'POST', body: JSON.stringify({ assetId: 'ln:bolt11' }) })).json();
+  assert.equal(d.direct.kind, 'ln');
+  assert.equal(d.direct.pr, 'lnbc50000n1qqq');
+  assert.equal(d.amountIn, '5000');
+
+  const r = await (await call(`/pay/${inv.pay_token}/cashu`, { method: 'POST', body: JSON.stringify({ key: d.key, token: 'cashuBxyz' }) })).json();
+  assert.deepEqual(r, { paid: true, change: 'cashuBchange', why: null });
+  assert.deepEqual(melted, { token: 'cashuBxyz', pr: 'lnbc50000n1qqq' });
+  assert.equal((await s.db.invoiceById(1)).status, 'PAID');
+  assert.match(s.last().text, /te ha pagado 350,00\s€/);
+  assert.match(s.last().text, /5000 sats · Cashu ecash/);
+  const again = await (await call(`/pay/${inv.pay_token}/cashu`, { method: 'POST', body: JSON.stringify({ key: d.key, token: 'cashuBxyz' }) })).json();
+  assert.equal(again.paid, false, 'a paid invoice is not paid twice');
 });

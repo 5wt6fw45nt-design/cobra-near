@@ -47,7 +47,8 @@ export function payPage({ token, invoice, options, lang, badge = null }) {
   .row:first-of-type { border-top:0; }
   .row span:last-child { text-align:right; overflow-wrap:anywhere; }
   label { display:block; font-weight:600; margin:14px 0 6px; font-size:14px; }
-  select, input { width:100%; font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:11px 12px; }
+  textarea { resize:vertical; font:13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  select, input, textarea { width:100%; font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:11px 12px; }
   select:focus, input:focus { outline:2px solid var(--accent); outline-offset:1px; }
   button { width:100%; font:inherit; font-weight:700; border:0; border-radius:12px; padding:13px; margin-top:16px; background:var(--accent); color:var(--accent-ink); cursor:pointer; }
   button:disabled { opacity:.55; cursor:wait; }
@@ -102,6 +103,13 @@ export function payPage({ token, invoice, options, lang, badge = null }) {
     <div class="muted" id="expires" style="margin-top:10px"></div>
     <button class="hidden" id="wallet"></button>
     <div class="err" id="walletErr"></div>
+    <div class="hidden" id="lnBox">
+      <label for="ecash" id="lEcash"></label>
+      <textarea id="ecash" rows="3" autocomplete="off" spellcheck="false" placeholder="cashuB…"></textarea>
+      <button id="payEcash"></button>
+      <div class="muted" id="lnNote" style="margin-top:10px"></div>
+      <div class="hidden" id="changeBox"><div class="muted" id="lChange" style="margin-top:10px"></div><div class="addr" id="change"></div></div>
+    </div>
     <div class="hidden" id="ccdBox">
       <label for="txHash" id="lHash"></label>
       <input id="txHash" autocomplete="off" spellcheck="false" placeholder="0x… / 64 hex">
@@ -127,8 +135,8 @@ const OPTIONS = ${embed(options)};
 const BADGE = ${embed(badge && badge.valid ? { token: badge.token, url: badge.url } : null)};
 const L = (navigator.language || '').startsWith('es') ? 'es' : ${embed(lang === 'es' ? 'es' : 'en')};
 const TX = {
-  en: { tagline: 'pay with any crypto', from: (f, n) => 'Invoice' + (n ? ' #' + n : '') + ' from ' + f, to: 'To', due: 'Due', receives: 'Received as', asset: 'Pay with', refund: 'Your address on that chain', refundHint: (c) => 'Only used to send money back if something goes wrong (or the excess, if you send more). Your ' + c + ' address.', nearHint: 'Your NEAR account, e.g. you.near', go: 'Get payment address', send: 'Send exactly', to2: 'To this address (tap to copy)', memo: 'Memo / tag (required)', expires: (m) => 'This address waits for your payment ' + m + ' min. After that, start again.', waiting: 'Waiting for your payment…', known: 'Payment seen, confirming…', processing: 'Payment received, converting…', incomplete: 'Less than the amount arrived. Send the rest to the same address.', success: 'Paid', refunded: 'The payment was refunded to your address.', failed: 'Something failed; your funds are refunded to your address.', back: 'Pay with something else', copied: 'Copied', paidTitle: 'Invoice paid', thanks: 'Thank you!', seeTx: 'See the transaction', closed: 'This invoice is no longer open.', errAsset: 'Choose what you pay with.', errRefund: 'Write your address on that chain.', errGeneric: 'That did not work. Check the address and try again.', errLimit: 'Too many attempts for this invoice. Ask for a new link.', verified: 'Verified by Concordium', hash: 'Already paid? Paste the transaction hash to confirm now', confirm: 'Confirm payment', agents: 'AI agents can pay this invoice over x402: ', ccdSend: 'Send exactly this amount of CCD from your Concordium wallet. The last digits identify your invoice.', wallet: 'Pay with my wallet', noWallet: 'No wallet found here. Open this page in your wallet app (MetaMask, Rabby…) or send the amount by hand.', exact: 'Send exactly this amount: the last digits identify your invoice.', foot: 'Powered by NEAR Intents · Cobra never holds funds' },
-  es: { tagline: 'paga con cualquier cripto', from: (f, n) => 'Factura' + (n ? ' n.º ' + n : '') + ' de ' + f, to: 'Para', due: 'Vence', receives: 'Se recibe como', asset: 'Pagar con', refund: 'Tu dirección en esa red', refundHint: (c) => 'Solo se usa para devolverte el dinero si algo falla (o lo que sobre, si mandas de más). Tu dirección de ' + c + '.', nearHint: 'Tu cuenta de NEAR, por ejemplo tu.near', go: 'Obtener dirección de pago', send: 'Envía exactamente', to2: 'A esta dirección (toca para copiar)', memo: 'Memo / etiqueta (obligatorio)', expires: (m) => 'Esta dirección espera tu pago ' + m + ' min. Después, vuelve a empezar.', waiting: 'Esperando tu pago…', known: 'Pago visto, confirmando…', processing: 'Pago recibido, convirtiendo…', incomplete: 'Ha llegado menos del importe. Manda el resto a la misma dirección.', success: 'Pagado', refunded: 'El pago se ha devuelto a tu dirección.', failed: 'Algo ha fallado; tus fondos se devuelven a tu dirección.', back: 'Pagar con otra cosa', copied: 'Copiado', paidTitle: 'Factura pagada', thanks: '¡Gracias!', seeTx: 'Ver la transacción', closed: 'Esta factura ya no está abierta.', errAsset: 'Elige con qué pagas.', errRefund: 'Escribe tu dirección en esa red.', errGeneric: 'No ha funcionado. Revisa la dirección y vuelve a intentarlo.', errLimit: 'Demasiados intentos para esta factura. Pide un enlace nuevo.', verified: 'Verificado por Concordium', hash: '¿Ya has pagado? Pega el hash de la transacción para confirmarlo ya', confirm: 'Confirmar pago', agents: 'Los agentes de IA pueden pagar esta factura por x402: ', ccdSend: 'Envía exactamente esta cantidad de CCD desde tu cartera de Concordium. Los últimos decimales identifican tu factura.', wallet: 'Pagar con mi cartera', noWallet: 'No hay cartera aquí. Abre esta página en la app de tu cartera (MetaMask, Rabby…) o manda el importe a mano.', exact: 'Envía exactamente esta cantidad: los últimos decimales identifican tu factura.', foot: 'Funciona con NEAR Intents · Cobra nunca toca los fondos' },
+  en: { tagline: 'pay with any crypto', from: (f, n) => 'Invoice' + (n ? ' #' + n : '') + ' from ' + f, to: 'To', due: 'Due', receives: 'Received as', asset: 'Pay with', refund: 'Your address on that chain', refundHint: (c) => 'Only used to send money back if something goes wrong (or the excess, if you send more). Your ' + c + ' address.', nearHint: 'Your NEAR account, e.g. you.near', go: 'Get payment address', send: 'Send exactly', to2: 'To this address (tap to copy)', memo: 'Memo / tag (required)', expires: (m) => 'This address waits for your payment ' + m + ' min. After that, start again.', waiting: 'Waiting for your payment…', known: 'Payment seen, confirming…', processing: 'Payment received, converting…', incomplete: 'Less than the amount arrived. Send the rest to the same address.', success: 'Paid', refunded: 'The payment was refunded to your address.', failed: 'Something failed; your funds are refunded to your address.', back: 'Pay with something else', copied: 'Copied', paidTitle: 'Invoice paid', thanks: 'Thank you!', seeTx: 'See the transaction', closed: 'This invoice is no longer open.', errAsset: 'Choose what you pay with.', errRefund: 'Write your address on that chain.', errGeneric: 'That did not work. Check the address and try again.', errLimit: 'Too many attempts for this invoice. Ask for a new link.', ecash: 'Or pay with Cashu ecash: paste a token', payEcash: 'Pay with ecash', lnNote: 'Lightning payments are confirmed automatically.', lnNoVerify: "This Lightning address can't confirm payments automatically; ecash payments are confirmed at once.", change: 'Your change (keep it, it is yours: tap to copy)', lnSend: 'Pay this Lightning invoice from any wallet, or with Cashu ecash below.', verified: 'Verified by Concordium', hash: 'Already paid? Paste the transaction hash to confirm now', confirm: 'Confirm payment', agents: 'AI agents can pay this invoice over x402: ', ccdSend: 'Send exactly this amount of CCD from your Concordium wallet. The last digits identify your invoice.', wallet: 'Pay with my wallet', noWallet: 'No wallet found here. Open this page in your wallet app (MetaMask, Rabby…) or send the amount by hand.', exact: 'Send exactly this amount: the last digits identify your invoice.', foot: 'Powered by NEAR Intents · Cobra never holds funds' },
+  es: { tagline: 'paga con cualquier cripto', from: (f, n) => 'Factura' + (n ? ' n.º ' + n : '') + ' de ' + f, to: 'Para', due: 'Vence', receives: 'Se recibe como', asset: 'Pagar con', refund: 'Tu dirección en esa red', refundHint: (c) => 'Solo se usa para devolverte el dinero si algo falla (o lo que sobre, si mandas de más). Tu dirección de ' + c + '.', nearHint: 'Tu cuenta de NEAR, por ejemplo tu.near', go: 'Obtener dirección de pago', send: 'Envía exactamente', to2: 'A esta dirección (toca para copiar)', memo: 'Memo / etiqueta (obligatorio)', expires: (m) => 'Esta dirección espera tu pago ' + m + ' min. Después, vuelve a empezar.', waiting: 'Esperando tu pago…', known: 'Pago visto, confirmando…', processing: 'Pago recibido, convirtiendo…', incomplete: 'Ha llegado menos del importe. Manda el resto a la misma dirección.', success: 'Pagado', refunded: 'El pago se ha devuelto a tu dirección.', failed: 'Algo ha fallado; tus fondos se devuelven a tu dirección.', back: 'Pagar con otra cosa', copied: 'Copiado', paidTitle: 'Factura pagada', thanks: '¡Gracias!', seeTx: 'Ver la transacción', closed: 'Esta factura ya no está abierta.', errAsset: 'Elige con qué pagas.', errRefund: 'Escribe tu dirección en esa red.', errGeneric: 'No ha funcionado. Revisa la dirección y vuelve a intentarlo.', errLimit: 'Demasiados intentos para esta factura. Pide un enlace nuevo.', ecash: 'O paga con ecash de Cashu: pega un token', payEcash: 'Pagar con ecash', lnNote: 'Los pagos Lightning se confirman solos.', lnNoVerify: 'Esta dirección Lightning no confirma pagos sola; los pagos con ecash se confirman al momento.', change: 'Tu cambio (guárdalo, es tuyo: toca para copiar)', lnSend: 'Paga esta factura Lightning desde cualquier cartera, o con ecash de Cashu aquí debajo.', verified: 'Verificado por Concordium', hash: '¿Ya has pagado? Pega el hash de la transacción para confirmarlo ya', confirm: 'Confirmar pago', agents: 'Los agentes de IA pueden pagar esta factura por x402: ', ccdSend: 'Envía exactamente esta cantidad de CCD desde tu cartera de Concordium. Los últimos decimales identifican tu factura.', wallet: 'Pagar con mi cartera', noWallet: 'No hay cartera aquí. Abre esta página en la app de tu cartera (MetaMask, Rabby…) o manda el importe a mano.', exact: 'Envía exactamente esta cantidad: los últimos decimales identifican tu factura.', foot: 'Funciona con NEAR Intents · Cobra nunca toca los fondos' },
 }[L];
 const $ = (id) => document.getElementById(id);
 const fmt = (n, c) => new Intl.NumberFormat(L === 'es' ? 'es-ES' : 'en-US', { style: 'currency', currency: c }).format(n);
@@ -191,11 +199,19 @@ function showDeposit(d) {
   if (d.memo) $('memo').textContent = d.memo;
   $('qr').innerHTML = '';
   // Direct MUSD: an EIP-681 link, so a wallet that scans it fills in token, network and exact amount
-  const qrText = d.direct && d.direct.kind === 'evm' ? 'ethereum:' + d.direct.token + '@' + parseInt(d.direct.chainId, 16) + '/transfer?address=' + d.address + '&uint256=' + d.direct.wei : d.address;
+  const qrText = d.direct && d.direct.kind === 'ln' ? 'lightning:' + d.direct.pr : d.direct && d.direct.kind === 'evm' ? 'ethereum:' + d.direct.token + '@' + parseInt(d.direct.chainId, 16) + '/transfer?address=' + d.address + '&uint256=' + d.direct.wei : d.address;
   if (window.QRCode) new QRCode($('qr'), { text: qrText, width: 220, height: 220 });
   const ccd = d.direct && d.direct.kind === 'ccd';
-  $('expires').textContent = ccd ? TX.ccdSend : d.direct ? TX.exact : TX.expires(Math.max(1, Math.round((d.deadline - Date.now()) / 60000)));
-  $('wallet').classList.toggle('hidden', !d.direct || ccd);
+  const ln = d.direct && d.direct.kind === 'ln';
+  if (ln) { $('addr').textContent = d.direct.pr; $('sendAmount').textContent = d.amountIn + ' sats · Lightning'; }
+  $('lnBox').classList.toggle('hidden', !ln);
+  if (ln) {
+    $('lEcash').textContent = TX.ecash; $('payEcash').textContent = TX.payEcash; $('lChange').textContent = TX.change;
+    $('lnNote').textContent = d.direct.verify ? TX.lnNote : TX.lnNoVerify;
+    $('payEcash').onclick = () => payEcash(d);
+  }
+  $('expires').textContent = ln ? TX.lnSend : ccd ? TX.ccdSend : d.direct ? TX.exact : TX.expires(Math.max(1, Math.round((d.deadline - Date.now()) / 60000)));
+  $('wallet').classList.toggle('hidden', !d.direct || ccd || ln);
   $('ccdBox').classList.toggle('hidden', !ccd);
   if (ccd) {
     $('lHash').textContent = TX.hash; $('confirm').textContent = TX.confirm;
@@ -207,6 +223,21 @@ function showDeposit(d) {
   setStatus(d.status);
   clearInterval(watching);
   watching = setInterval(() => poll(d.key), 5000);
+}
+
+/** Cashu: the token is melted at its mint into this Lightning invoice; any change comes back as a new token. */
+async function payEcash(d) {
+  $('walletErr').textContent = '';
+  const token = $('ecash').value.trim();
+  if (!/^cashu[AB]/.test(token)) return ($('walletErr').textContent = TX.errGeneric);
+  $('payEcash').disabled = true;
+  try {
+    const r = await fetch(d.direct.cashu, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key: d.key, token }) });
+    const out = await r.json().catch(() => ({}));
+    if (out.change) { $('changeBox').classList.remove('hidden'); $('change').textContent = out.change; $('change').onclick = () => copy($('change')); }
+    if (out.paid) { $('ecash').value = ''; return poll(d.key); }
+    $('walletErr').textContent = out.why || TX.errGeneric;
+  } catch { $('walletErr').textContent = TX.errGeneric; } finally { $('payEcash').disabled = false; }
 }
 
 /** CCD paid by hand: the client pastes the transaction hash and the page settles it through the same x402 endpoint agents use. */

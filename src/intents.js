@@ -13,6 +13,7 @@ export const PAYOUTS = {
   bch: { asset: 'nep141:bch.omft.near', symbol: 'BCH', decimals: 8, stable: false, chainName: 'Bitcoin Cash', example: 'bitcoincash:qp…' },
   mezo: { direct: true, symbol: 'MUSD', decimals: 18, stable: true, chainName: 'Mezo', example: '0x1234…abcd' }, // paid directly, see mezo.js
   ccd: { direct: true, symbol: 'CCD', decimals: 6, stable: false, chainName: 'Concordium', example: '3z9dkoTnLi…' }, // paid directly or over x402, see concordium.js
+  ln: { direct: true, symbol: 'sats', decimals: 0, stable: false, chainName: 'Lightning', example: 'tu@minibits.cash' }, // Lightning address, or Cashu ecash melted into it, see lightning.js / cashu.js
 };
 
 /** Format check for a payout address (NEAR accounts are also checked on chain, see accountExists). */
@@ -22,13 +23,14 @@ export function isPayoutAddress(chain, s) {
   if (chain === 'arb' || chain === 'mezo') return /^0x[0-9a-fA-F]{40}$/.test(a);
   if (chain === 'bch') return /^(bitcoincash:)?[qp][02-9ac-hj-np-z]{41}$/.test(a.toLowerCase());
   if (chain === 'ccd') return /^[1-9A-HJ-NP-Za-km-z]{50}$/.test(a);
+  if (chain === 'ln') return /^[a-z0-9._+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(a);
   return false;
 }
 
 /** How addresses are stored: NEAR and cashaddr in lowercase with the bitcoincash: prefix, EVM as given. */
 export function normalizePayoutAddress(chain, s) {
   const a = String(s || '').trim();
-  if (chain === 'near') return a.toLowerCase().replace(/^@/, '');
+  if (chain === 'near' || chain === 'ln') return a.toLowerCase().replace(/^@/, '');
   if (chain === 'bch') return a.toLowerCase().startsWith('bitcoincash:') ? a.toLowerCase() : `bitcoincash:${a.toLowerCase()}`;
   return a;
 }
@@ -43,7 +45,7 @@ export const PAY_WITH = [
 
 export const CHAIN_NAMES = {
   near: 'NEAR', base: 'Base', arb: 'Arbitrum', sol: 'Solana', eth: 'Ethereum', tron: 'Tron', bsc: 'BNB Chain',
-  btc: 'Bitcoin', zec: 'Zcash', mezo: 'Mezo', ccd: 'Concordium', bch: 'Bitcoin Cash', ltc: 'Litecoin', doge: 'Dogecoin', xrp: 'XRP Ledger',
+  btc: 'Bitcoin', zec: 'Zcash', mezo: 'Mezo', ccd: 'Concordium', ln: 'Lightning', bch: 'Bitcoin Cash', ltc: 'Litecoin', doge: 'Dogecoin', xrp: 'XRP Ledger',
 };
 
 const STABLE = new Set(['USDC', 'USDT']);
@@ -115,10 +117,20 @@ export function createIntents({ base, apiKey, rpc }, fetchFn = (...a) => fetch(.
     return String(Math.ceil(Number((amount * 10 ** p.decimals).toFixed(6)))); // toFixed: 350 € × 1.12 must not round up to …001
   }
 
+  /** Invoice amount in sats at the live BTC price (euros through EURe). */
+  async function satsFor(cents, currency) {
+    const list = await tokens();
+    const usd = Number(await payoutUnits(cents, currency, 'near')) / 1e6;
+    const btc = list.find((x) => x.symbol === 'BTC' && x.blockchain === 'btc')?.price;
+    if (!btc) throw new IntentsError(503, { message: 'no BTC price' });
+    return Math.ceil((usd / btc) * 1e8);
+  }
+
   return {
     tokens,
     payOptions,
     payoutUnits,
+    satsFor,
 
     /**
      * A real quote with a deposit address. The client sends `amountIn` of `originAsset` there;

@@ -13,7 +13,7 @@ const ymd = (ms) => new Date(ms).toISOString().slice(0, 10);
 const daysBetween = (a, b) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / DAY);
 const firstName = (name) => String(name).split(' ')[0];
 
-export function createBot({ api, db, cfg, payments, intents, concordium = null, ai = null, clock = Date.now, http = (...a) => fetch(...a), stt = transcribe, nlu = understand, fixer = applyFix, reminderWriter = writeReminder, token = newPayToken }) {
+export function createBot({ api, db, cfg, payments, intents, concordium = null, lightning = null, ai = null, clock = Date.now, http = (...a) => fetch(...a), stt = transcribe, nlu = understand, fixer = applyFix, reminderWriter = writeReminder, token = newPayToken }) {
   const reply = (chatId, text, extra = {}) => api.call('sendMessage', message(chatId, text, extra));
   const edit = (chatId, messageId, text, extra = {}) => (messageId
     ? api.call('editMessageText', { chat_id: chatId, message_id: messageId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...extra })
@@ -157,7 +157,7 @@ export function createBot({ api, db, cfg, payments, intents, concordium = null, 
   async function setPayoutAddress(chatId, u, chain, text, draftId, now) {
     const t = T(u.lang);
     const address = normalizePayoutAddress(chain, text);
-    const onChain = { near: () => intents.accountExists(address), ccd: () => concordium.accountExists(address) }[chain];
+    const onChain = { near: () => intents.accountExists(address), ccd: () => concordium.accountExists(address), ln: async () => Boolean(await lightning.resolve(address)) }[chain];
     const ok = isPayoutAddress(chain, address) && (!onChain || await onChain().catch(() => false));
     if (!ok) return reply(chatId, t.badAddress(chain));
     await db.setPayout(u.id, chain, address);

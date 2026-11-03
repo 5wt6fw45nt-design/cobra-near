@@ -30,8 +30,13 @@ The freelancer picks the network once (⚙️ Settings → Where I get paid):
 | **BCH · Bitcoin Cash** | any token, any chain | NEAR Intents 1Click, BCH at the live price |
 | **MUSD · Mezo** | MUSD on Mezo, straight to the freelancer | Cobra watches MUSD `Transfer` logs for the exact amount |
 | **CCD · Concordium** | CCD by a person, or by an AI agent over **x402** | Cobra watches the account, or verifies the agent's tx hash |
+| **sats · Lightning** | any Lightning wallet, or a pasted **Cashu ecash** token | LNURL-pay invoice from the freelancer's Lightning address; ecash melted at its mint |
 
 MUSD (Mezo's Bitcoin-backed stablecoin) is not routed by 1Click, so Mezo invoices are paid directly: the payment page shows the freelancer's address, the exact amount (tagged with the invoice id in the last wei so two equal invoices never collide), an EIP-681 QR, and a **Pay with my wallet** button that switches the wallet to Mezo and sends `transfer(to, amount)`. Cobra scans MUSD `Transfer` events to the freelancer every minute and alerts them with the explorer link. `MEZO_NETWORK` selects `testnet` (default, free to demo with faucet funds) or `mainnet`.
+
+### Cashu ecash: pay an invoice by pasting a token
+
+Built for Nut November (`src/cashu.js`, `src/lightning.js`). The freelancer gives a Lightning address (a Cashu wallet such as Minibits or npub.cash provides one, no KYC). For each payment attempt Cobra asks that address for a BOLT11 invoice of the exact amount in sats (LNURL-pay, LUD-06/16) and checks it is for the amount asked. The client can pay it from any Lightning wallet, or **paste a Cashu token**: Cobra melts it at the token's own mint straight into the freelancer's invoice (NUT-05 via `@cashu/cashu-ts`), so the ecash never rests with Cobra, and hands back any change as a fresh token. If anything fails, every proof goes back to the client as a token. Settlement is confirmed by the melt itself or, for plain Lightning, by the address's LUD-21 verify URL when it offers one.
 
 ### Concordium: accountable agents that get paid by other agents
 
@@ -80,7 +85,7 @@ Design details:
 ## Run it
 
 ```bash
-npm test                                  # 24 tests, no network
+npm test                                  # 27 tests, no network
 wrangler d1 create cobra-near             # put the id in wrangler.toml
 wrangler d1 migrations apply cobra-near --remote
 wrangler secret put BOT_TOKEN             # from @BotFather
