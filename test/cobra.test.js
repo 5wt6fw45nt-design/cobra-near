@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { createDb } from '../src/db.js';
 import { d1Shim } from '../scripts/d1-shim.js';
@@ -10,6 +11,7 @@ import { budgetedAi, cleanEmail, normalizeDraft } from '../src/ai.js';
 import { verifyInitData, toCsv, toRow } from '../src/webapp.js';
 import worker from '../src/worker.js';
 import { createMezo, formatUnits, taggedAmount, transferData } from '../src/mezo.js';
+import { createConcordium, formatCcd, taggedCcd, parsePaymentHeader } from '../src/concordium.js';
 
 const T0 = Date.UTC(2026, 10, 3, 10, 0); // 3 Nov 2026
 const MIN = 60_000;
@@ -167,7 +169,7 @@ function fakeApi() {
   };
 }
 
-function setup() {
+function setup({ concordium = null } = {}) {
   const cfg = loadConfig({ PUBLIC_URL: 'https://cobra.test' });
   const d1 = d1Shim();
   const db = createDb(d1);
@@ -175,10 +177,10 @@ function setup() {
   const intents = fakeIntents();
   let now = T0;
   const clock = () => now;
-  const payments = createPayments({ db, intents, api, cfg, clock });
+  const payments = createPayments({ db, intents, concordium, api, cfg, clock });
   let n = 0;
   const bot = createBot({
-    api, db, cfg, payments, intents, clock,
+    api, db, cfg, payments, intents, concordium, clock,
     nlu: fakeNlu,
     fixer: async (_ai, d, text) => ({ ...d, items: d.items.map((it) => ({ ...it, cents: /400/.test(text) ? 40000 : it.cents })) }),
     reminderWriter: async (_ai, inv) => `Hola ${inv.client_name}, te recuerdo la factura.`,
@@ -218,7 +220,7 @@ test('voice/text → draft → asks where to get paid once → payment link to s
   const send = s.buttons().find((b) => b.callback_data.startsWith('send:'));
   await s.tap(send.callback_data);
   assert.match(s.last().text, /Dónde quieres <b>cobrar/);
-  assert.deepEqual(s.buttons().map((b) => b.text), ['USDC · NEAR', 'USDC · Arbitrum', 'BCH · Bitcoin Cash', 'MUSD · Mezo']);
+  assert.deepEqual(s.buttons().map((b) => b.text), ['USDC · NEAR', 'USDC · Arbitrum', 'BCH · Bitcoin Cash', 'MUSD · Mezo', 'CCD · Concordium']);
   assert.equal(await s.db.invoiceById(1), null, 'nothing created yet');
   await s.tap(s.buttons()[0].callback_data);
   assert.match(s.last().text, /cuenta de NEAR/);
@@ -555,4 +557,130 @@ test('Mezo invoices: the page offers MUSD direct, the chain is watched, the free
   assert.match(s.last().text, /392.000000000000000001 MUSD · Mezo/);
   assert.equal(s.buttons()[0].url, 'https://explorer.test/tx/0xabc');
   assert.equal((await s.db.invoiceById(1)).status, 'PAID');
+});
+
+// --- Concordium: CCD invoices, x402, Verified by Concordium badge ---
+
+const ACC = '3z9dkoTnLi2HEZvjnmKrMec2Gk2NKcEhdi4PugDWzP4GQtZiFa';
+const PAYER = '437cES8dVEU62XX3G1SbFBRKvi8ewueHS7ADQgJjQSpiS5rHGu';
+const HASH = 'a'.repeat(64);
+const xPayment = (hash) => Buffer.from(JSON.stringify({ x402Version: 1, scheme: 'exact', network: 'concordium:testnet', payload: { txHash: hash } })).toString('base64');
+
+test('Concordium helpers: tagged microCCD, formatting, X-PAYMENT parsing', () => {
+  assert.equal(taggedCcd(500, 0.0025, 3), '2000000003', '5 € at 0.0025 €/CCD = 2000 CCD, tagged with invoice 3');
+  assert.equal(formatCcd('2000000003'), '2000.000003');
+  assert.equal(formatCcd('5000000'), '5');
+  assert.equal(parsePaymentHeader(xPayment(HASH.toUpperCase())), HASH);
+  assert.equal(parsePaymentHeader(Buffer.from(JSON.stringify({ txHash: HASH })).toString('base64')), HASH);
+  assert.equal(parsePaymentHeader('nope'), null);
+  assert.equal(parsePaymentHeader(xPayment('123')), null);
+});
+
+test('Concordium: a transfer counts only if finalized, successful, to the freelancer and exact', async () => {
+  const statuses = {
+    [HASH]: { status: 'finalized', outcome: 'success', to: ACC, amount: '2000000003', sender: PAYER },
+    ['b'.repeat(64)]: { status: 'committed' },
+    ['c'.repeat(64)]: { status: 'finalized', outcome: 'success', to: ACC, amount: '2000000002', sender: PAYER },
+  };
+  const fn = async (url) => {
+    const u = new URL(url);
+    if (u.pathname.startsWith('/v0/submissionStatus/')) return Response.json(statuses[u.pathname.split('/').pop()] || { status: 'absent' });
+    if (u.pathname.startsWith('/v1/accTransactions/')) return Response.json({ transactions: [{ transactionHash: HASH, blockTime: T0 / 1000, details: { type: 'transfer', outcome: 'success', transferDestination: ACC, transferAmount: '2000000003', transferSource: PAYER } }] });
+    if (u.host === 'agent-registry-mcp.concordium.com') return Response.json({ summary: { valid: 1, invalid: 0 }, owner: ACC });
+    return Response.json({});
+  };
+  const c = createConcordium('testnet', fn);
+  assert.deepEqual(await c.verifyTransfer(HASH, ACC, '2000000003'), { ok: true, sender: PAYER });
+  assert.equal((await c.verifyTransfer('b'.repeat(64), ACC, '2000000003')).pending, true);
+  assert.equal((await c.verifyTransfer('c'.repeat(64), ACC, '2000000003')).why, 'wrong amount');
+  assert.equal((await c.verifyTransfer('d'.repeat(64), ACC, '1')).why, 'unknown transaction');
+  assert.equal((await c.verifyTransfer(HASH, PAYER, '2000000003')).why, 'wrong recipient');
+  assert.equal((await c.findTransfer(ACC, '2000000003', T0)).hash, HASH);
+  assert.equal(await c.findTransfer(ACC, '2000000003', T0 + 3_600_000), null, 'older than the invoice');
+  assert.equal((await c.checkBadge('Mf22soLh1NuZYFgBK8iSs')).valid, true);
+});
+
+function fakeConcordium() {
+  const st = { transfers: {}, account: ACC };
+  return {
+    st,
+    net: { name: 'Concordium Testnet', x402: 'concordium:testnet' },
+    price: async () => 0.0025,
+    accountExists: async (a) => a === st.account,
+    async verifyTransfer(hash, to, micro) {
+      const t = st.transfers[hash];
+      if (!t) return { ok: false, why: 'unknown transaction' };
+      if (t.to !== to || t.micro !== micro) return { ok: false, why: 'wrong amount' };
+      return { ok: true, sender: PAYER };
+    },
+    findTransfer: async () => null,
+    txUrl: (h) => `https://ccdexplorer.io/testnet/transaction/${h}`,
+    checkBadge: async () => ({ valid: true, url: 'https://agent-registry-mcp.concordium.com/v1/check-badge/Mf22?network=testnet' }),
+  };
+}
+
+test('x402: 402 with requirements, then an AI agent pays with a tx hash; hashes are single use', async () => {
+  const concordium = fakeConcordium();
+  const s = setup({ concordium });
+  const env = { DB: s.d1, BOT_TOKEN: 'T', PUBLIC_URL: 'https://cobra.test', CONCORDIUM_BADGE: 'Mf22soLh1NuZYFgBK8iSs' };
+  const deps = { intents: s.intents, api: s.api, concordium, clock: () => T0 };
+  const call = (path, init) => worker.fetch(new Request(`https://cobra.test${path}`, init), env, { waitUntil() {} }, deps);
+
+  await s.msg('Factura a Marta 350 euros por el logo');
+  await s.tap(s.buttons().find((b) => b.callback_data.startsWith('send:')).callback_data);
+  await s.tap(s.buttons().find((b) => b.callback_data.startsWith('po:ccd:')).callback_data);
+  await s.msg('nope');
+  assert.match(s.last().text, /no parece una dirección de Concordium/);
+  await s.msg(ACC);
+  const inv = await s.db.invoiceById(1);
+  assert.equal(inv.payout_chain, 'ccd');
+  const path = `/x402/${inv.pay_token}`;
+
+  const r1 = await call(path);
+  assert.equal(r1.status, 402);
+  const req = (await r1.json()).accepts[0];
+  assert.equal(req.scheme, 'exact');
+  assert.equal(req.network, 'concordium:testnet');
+  assert.equal(req.payTo, ACC);
+  assert.equal(req.maxAmountRequired, '140000000001', '350 € at 0.0025 €/CCD = 140000 CCD, tagged with invoice 1');
+  assert.ok(r1.headers.get('payment-required'));
+
+  assert.equal((await (await call(path, { headers: { 'x-payment': 'garbage' } })).json()).error, 'X-PAYMENT must be base64 JSON with payload.txHash');
+  assert.equal((await (await call(path, { headers: { 'x-payment': xPayment(HASH) } })).json()).error, 'unknown transaction');
+
+  concordium.st.transfers[HASH] = { to: ACC, micro: '140000000001' };
+  const ok = await call(path, { headers: { 'x-payment': xPayment(HASH) } });
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).paid, true);
+  const receipt = JSON.parse(Buffer.from(ok.headers.get('x-payment-response'), 'base64').toString());
+  assert.deepEqual(receipt, { success: true, transaction: HASH, network: 'concordium:testnet', payer: PAYER });
+  assert.equal((await s.db.invoiceById(1)).status, 'PAID');
+  assert.match(s.last().text, /Marta García te ha pagado 350,00\s€/);
+  assert.match(s.last().text, /140000.000001 CCD · Concordium/);
+  assert.equal(s.buttons()[0].url, `https://ccdexplorer.io/testnet/transaction/${HASH}`);
+  assert.equal((await call(path)).status, 200, 'paid: no more 402');
+
+  // The same hash cannot pay a second invoice
+  await s.msg('Otra a Marta 350 por el logo');
+  await s.tap(s.buttons().find((b) => b.callback_data.startsWith('send:')).callback_data);
+  const inv2 = await s.db.invoiceById(2);
+  concordium.st.transfers[HASH] = { to: ACC, micro: '140000000002' };
+  assert.equal((await (await call(`/x402/${inv2.pay_token}`, { headers: { 'x-payment': xPayment(HASH) } })).json()).error, 'payment already used');
+
+  // The payment page carries the live badge
+  const page = await (await call(`/pay/${inv2.pay_token}`)).text();
+  assert.match(page, /"token":"Mf22soLh1NuZYFgBK8iSs"/);
+  assert.equal((await call('/x402/tok00000000000000000099')).status, 404);
+});
+
+test('Agent Card: stored with the setup secret, served byte for byte for the on-chain hash', async () => {
+  const s = setup();
+  const env = { DB: s.d1, WEBHOOK_SECRET: 'S' };
+  const call = (path, init) => worker.fetch(new Request(`https://cobra.test${path}`, init), env, { waitUntil() {} }, { intents: s.intents, api: s.api });
+  assert.equal((await call('/.well-known/agent-card.json')).status, 404);
+  const card = '{"type":"https://eips.ethereum.org/EIPS/eip-8004#registration-v1","name":"Cobra"}';
+  assert.equal((await call('/setup/agent-card?secret=bad', { method: 'POST', body: card })).status, 403);
+  const r = await (await call('/setup/agent-card?secret=S', { method: 'POST', body: card })).json();
+  assert.equal(r.sha256, createHash('sha256').update(card).digest('hex'));
+  assert.equal(await (await call('/.well-known/agent-card.json')).text(), card);
 });

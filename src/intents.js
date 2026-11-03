@@ -12,6 +12,7 @@ export const PAYOUTS = {
   arb: { asset: 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near', symbol: 'USDC', decimals: 6, stable: true, chainName: 'Arbitrum', example: '0x1234…abcd' },
   bch: { asset: 'nep141:bch.omft.near', symbol: 'BCH', decimals: 8, stable: false, chainName: 'Bitcoin Cash', example: 'bitcoincash:qp…' },
   mezo: { direct: true, symbol: 'MUSD', decimals: 18, stable: true, chainName: 'Mezo', example: '0x1234…abcd' }, // paid directly, see mezo.js
+  ccd: { direct: true, symbol: 'CCD', decimals: 6, stable: false, chainName: 'Concordium', example: '3z9dkoTnLi…' }, // paid directly or over x402, see concordium.js
 };
 
 /** Format check for a payout address (NEAR accounts are also checked on chain, see accountExists). */
@@ -20,6 +21,7 @@ export function isPayoutAddress(chain, s) {
   if (chain === 'near') return isNearAccount(a);
   if (chain === 'arb' || chain === 'mezo') return /^0x[0-9a-fA-F]{40}$/.test(a);
   if (chain === 'bch') return /^(bitcoincash:)?[qp][02-9ac-hj-np-z]{41}$/.test(a.toLowerCase());
+  if (chain === 'ccd') return /^[1-9A-HJ-NP-Za-km-z]{50}$/.test(a);
   return false;
 }
 
@@ -41,7 +43,7 @@ export const PAY_WITH = [
 
 export const CHAIN_NAMES = {
   near: 'NEAR', base: 'Base', arb: 'Arbitrum', sol: 'Solana', eth: 'Ethereum', tron: 'Tron', bsc: 'BNB Chain',
-  btc: 'Bitcoin', zec: 'Zcash', mezo: 'Mezo', bch: 'Bitcoin Cash', ltc: 'Litecoin', doge: 'Dogecoin', xrp: 'XRP Ledger',
+  btc: 'Bitcoin', zec: 'Zcash', mezo: 'Mezo', ccd: 'Concordium', bch: 'Bitcoin Cash', ltc: 'Litecoin', doge: 'Dogecoin', xrp: 'XRP Ledger',
 };
 
 const STABLE = new Set(['USDC', 'USDT']);

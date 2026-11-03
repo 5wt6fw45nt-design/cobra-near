@@ -12,6 +12,8 @@ export function loadConfig(vars = globalThis.process?.env ?? {}) {
       rpc: env('NEAR_RPC', 'https://free.rpc.fastnear.com'),
     },
     mezoNetwork: env('MEZO_NETWORK', 'testnet'), // MUSD payouts: 'testnet' (free to demo) or 'mainnet'
+    concordiumNetwork: env('CONCORDIUM_NETWORK', 'testnet'), // CCD payouts and x402
+    concordiumBadge: env('CONCORDIUM_BADGE', ''), // the agent's Verified by Concordium badge (Base58 token address), once registered
     publicUrl: env('PUBLIC_URL', ''), // https://cobra-near.<you>.workers.dev, for payment links
     quoteMinutes: Number(env('QUOTE_MINUTES', 60)), // how long a deposit address waits for the client
     maxAudioSeconds: Number(env('MAX_AUDIO_SECONDS', 120)), // invoices are short; keeps the free Workers AI quota safe

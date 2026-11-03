@@ -6,6 +6,7 @@ import { createApi } from './telegram.js';
 import { createIntents, IntentsError } from './intents.js';
 import { createPayments, PayError } from './payments.js';
 import { createMezo, MUSD_ASSET } from './mezo.js';
+import { createConcordium, CCD_ASSET, parsePaymentHeader } from './concordium.js';
 import { createBot } from './bot.js';
 import { budgetedAi } from './ai.js';
 import { MINI_APP } from './miniapp.js';
@@ -18,27 +19,79 @@ export function build(env, deps = {}) {
   const api = deps.api || createApi(cfg.token);
   const intents = deps.intents || createIntents(cfg.intents);
   const mezo = deps.mezo || createMezo(cfg.mezoNetwork);
-  const payments = createPayments({ db, intents, mezo, api, cfg, clock: deps.clock });
-  const bot = createBot({ api, db, cfg, payments, intents, ai: budgetedAi(env.AI, db, cfg.aiCallsPerDay), clock: deps.clock });
-  return { cfg, db, api, intents, mezo, payments, bot };
+  const concordium = deps.concordium || createConcordium(cfg.concordiumNetwork);
+  const payments = createPayments({ db, intents, mezo, concordium, api, cfg, clock: deps.clock });
+  const bot = createBot({ api, db, cfg, payments, intents, concordium, ai: budgetedAi(env.AI, db, cfg.aiCallsPerDay), clock: deps.clock });
+  return { cfg, db, api, intents, mezo, concordium, payments, bot };
 }
 
 const secretOk = (env, url) => env.WEBHOOK_SECRET && url.searchParams.get('secret') === env.WEBHOOK_SECRET;
 const html = (body, status = 200) => new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'x-robots-tag': 'noindex', 'referrer-policy': 'no-referrer' } });
 
+/** The agent's Verified by Concordium badge, checked live against the Agent Registry and cached ten minutes. */
+async function badgeOf(cfg, db, concordium) {
+  if (!cfg.concordiumBadge) return null;
+  const cached = JSON.parse((await db.kvGet('badge')) || 'null');
+  if (cached?.token === cfg.concordiumBadge && Date.now() - cached.at < 600_000) return cached;
+  const r = await concordium.checkBadge(cfg.concordiumBadge);
+  const badge = { at: Date.now(), token: cfg.concordiumBadge, valid: r.valid, url: r.url };
+  await db.kvSet('badge', JSON.stringify(badge));
+  return badge;
+}
+
+const b64json = (x) => btoa(unescape(encodeURIComponent(JSON.stringify(x))));
+
+/**
+ * x402 for Concordium invoices: GET /x402/<token> answers 402 with the payment requirements; the agent sends the CCD
+ * transfer and repeats the request with X-PAYMENT (base64 JSON carrying the transaction hash). Cobra verifies it on chain,
+ * settles the invoice, alerts the freelancer and answers 200 with X-PAYMENT-RESPONSE.
+ */
+async function handleX402(req, env, url, deps) {
+  const token = url.pathname.split('/')[2] || '';
+  const { db, concordium, payments } = build(env, deps);
+  const inv = /^[A-Za-z0-9_-]{16,40}$/.test(token) ? await db.invoiceByToken(token) : null;
+  if (!inv || inv.payout_chain !== 'ccd') return Response.json({ error: 'not found' }, { status: 404 });
+  const invoice = { number: inv.number, description: inv.description, amount: inv.amount_cents / 100, currency: inv.currency };
+  if (inv.status === 'PAID') return Response.json({ paid: true, invoice, tx: inv.paid_tx });
+  if (inv.status !== 'SENT') return Response.json({ error: 'invoice closed' }, { status: 410 });
+
+  const d = await payments.startPayment(inv, { assetId: CCD_ASSET });
+  const requirements = {
+    scheme: 'exact', network: concordium.net.x402, maxAmountRequired: d.direct.micro, asset: 'CCD', payTo: d.address,
+    resource: url.origin + url.pathname, description: `Invoice ${inv.number}: ${inv.description}`, mimeType: 'application/json', maxTimeoutSeconds: 600,
+    extra: { decimals: 6, invoice, proof: 'X-PAYMENT = base64 JSON {"x402Version":1,"scheme":"exact","network":"' + concordium.net.x402 + '","payload":{"txHash":"<hash of a CCD transfer of exactly maxAmountRequired microCCD to payTo>"}}' },
+  };
+  const required = (error, status = 402) => new Response(JSON.stringify({ x402Version: 1, error, accepts: [requirements] }), {
+    status, headers: { 'content-type': 'application/json', 'payment-required': b64json({ x402Version: 1, accepts: [requirements] }) },
+  });
+
+  const header = req.headers.get('x-payment');
+  if (!header) return required('X-PAYMENT header is required');
+  const hash = parsePaymentHeader(header);
+  if (!hash) return required('X-PAYMENT must be base64 JSON with payload.txHash');
+  const r = await payments.settleX402(inv, hash);
+  if (!r.ok) return required(r.why);
+  const receipt = { success: true, transaction: hash, network: concordium.net.x402, payer: r.payer || null };
+  return new Response(JSON.stringify({ paid: true, invoice, tx: r.tx }), { headers: { 'content-type': 'application/json', 'x-payment-response': b64json(receipt) } });
+}
+
 /** /pay/<token>, /pay/<token>/quote, /pay/<token>/status */
 async function handlePay(req, env, url, deps) {
   const [, , token, action] = url.pathname.split('/');
   if (!/^[A-Za-z0-9_-]{16,40}$/.test(token || '')) return html('Not found', 404);
-  const { db, intents, mezo, payments } = build(env, deps);
+  const { cfg, db, intents, mezo, concordium, payments } = build(env, deps);
   const inv = await db.invoiceByToken(token);
   if (!inv) return html('Not found', 404);
 
   if (!action && req.method === 'GET') {
     const owner = await db.getUser(inv.user_id);
-    const direct = [{ assetId: MUSD_ASSET, symbol: 'MUSD', chain: 'mezo', chainName: mezo.net.name, direct: true }];
-    const options = inv.status !== 'SENT' ? [] : inv.payout_chain === 'mezo' ? direct : await intents.payOptions().catch(() => []);
-    return html(payPage({ token, invoice: publicInvoice(inv, owner), options, lang: owner?.lang }));
+    const direct = {
+      mezo: [{ assetId: MUSD_ASSET, symbol: 'MUSD', chain: 'mezo', chainName: mezo.net.name, direct: true }],
+      ccd: [{ assetId: CCD_ASSET, symbol: 'CCD', chain: 'ccd', chainName: concordium.net.name, direct: true }],
+    }[inv.payout_chain];
+    const options = inv.status !== 'SENT' ? [] : direct || await intents.payOptions().catch(() => []);
+    const badge = await badgeOf(cfg, db, concordium);
+    return html(payPage({ token, invoice: publicInvoice(inv, owner), options, lang: owner?.lang, badge }));
   }
 
   if (action === 'quote' && req.method === 'POST') {
@@ -59,7 +112,7 @@ async function handlePay(req, env, url, deps) {
     if (dep && dep.invoice_id === inv.id && Date.now() - dep.checked_at > 4000) await payments.refresh(dep);
     const fresh = await db.invoiceByToken(token);
     const latest = dep && dep.invoice_id === inv.id ? await db.getDeposit(address) : null;
-    return Response.json({ invoice: publicInvoice(fresh), deposit: latest ? payments.view(latest) : null });
+    return Response.json({ invoice: publicInvoice(fresh), deposit: latest ? payments.view(latest, fresh) : null });
   }
 
   return html('Not found', 404);
@@ -78,6 +131,21 @@ export default {
     }
 
     if (url.pathname.startsWith('/pay/')) return handlePay(req, env, url, deps);
+    if (url.pathname.startsWith('/x402/')) return handleX402(req, env, url, deps);
+
+    // The Agent Card registered in the Concordium Agent Registry: served byte for byte, so its SHA-256 matches on chain.
+    if (url.pathname === '/.well-known/agent-card.json') {
+      const card = await createDb(env.DB).kvGet('agentcard');
+      return card ? new Response(card, { headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' } }) : Response.json({ error: 'not registered yet' }, { status: 404 });
+    }
+    if (url.pathname === '/setup/agent-card' && req.method === 'POST') {
+      if (!secretOk(env, url)) return new Response('forbidden', { status: 403 });
+      const text = await req.text();
+      JSON.parse(text); // must be valid JSON
+      await createDb(env.DB).kvSet('agentcard', text);
+      const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+      return Response.json({ ok: true, sha256: sha });
+    }
 
     if (url.pathname === '/app') return new Response(MINI_APP, { headers: { 'content-type': 'text/html; charset=utf-8' } });
 

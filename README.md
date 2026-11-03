@@ -29,8 +29,17 @@ The freelancer picks the network once (⚙️ Settings → Where I get paid):
 | **USDC · Arbitrum** | any token, any chain | NEAR Intents 1Click, `EXACT_OUTPUT` |
 | **BCH · Bitcoin Cash** | any token, any chain | NEAR Intents 1Click, BCH at the live price |
 | **MUSD · Mezo** | MUSD on Mezo, straight to the freelancer | Cobra watches MUSD `Transfer` logs for the exact amount |
+| **CCD · Concordium** | CCD by a person, or by an AI agent over **x402** | Cobra watches the account, or verifies the agent's tx hash |
 
 MUSD (Mezo's Bitcoin-backed stablecoin) is not routed by 1Click, so Mezo invoices are paid directly: the payment page shows the freelancer's address, the exact amount (tagged with the invoice id in the last wei so two equal invoices never collide), an EIP-681 QR, and a **Pay with my wallet** button that switches the wallet to Mezo and sends `transfer(to, amount)`. Cobra scans MUSD `Transfer` events to the freelancer every minute and alerts them with the explorer link. `MEZO_NETWORK` selects `testnet` (default, free to demo with faucet funds) or `mainnet`.
+
+### Concordium: accountable agents that get paid by other agents
+
+Built for the Concordium Trusted Agents Hackathon (`src/concordium.js`, `handleX402` in `src/worker.js`, `scripts/x402-agent.mjs`):
+
+- **x402 invoices.** `GET /x402/<invoice>` answers `402 Payment Required` with x402 payment requirements (`scheme: exact`, `network: concordium:testnet`, `asset: CCD`, `payTo` = the freelancer's Concordium account, `maxAmountRequired` = the invoice in microCCD, tagged with the invoice id). A buyer's agent sends the CCD transfer and repeats the request with `X-PAYMENT` (base64 JSON with `payload.txHash`). Cobra checks on chain that it is finalized, successful, to the right account and for the exact amount, never accepts a hash twice, settles the invoice, alerts the freelancer and returns `X-PAYMENT-RESPONSE`. `scripts/x402-agent.mjs` is a complete paying agent built on `@concordium/web-sdk`.
+- **People pay too.** The payment page shows the account and exact CCD amount; Cobra watches the account through the wallet-proxy and settles automatically, or instantly when the client pastes the transaction hash (the page uses the same x402 endpoint).
+- **Verified by Concordium.** Cobra is registered in the CIS-8004 Agent Registry. Its Agent Card (ERC-8004 + A2A, with the badge extension) is served byte for byte at `/.well-known/agent-card.json` so its SHA-256 matches the on-chain `metadata_hash`. Every payment page checks the badge live against the Agent Registry and shows **✓ Verified by Concordium**: the client knows an accountable, identity-verified human stands behind the invoice, which is exactly what invoice fraud lacks.
 
 ## Try it
 
@@ -71,7 +80,7 @@ Design details:
 ## Run it
 
 ```bash
-npm test                                  # 20 tests, no network
+npm test                                  # 24 tests, no network
 wrangler d1 create cobra-near             # put the id in wrangler.toml
 wrangler d1 migrations apply cobra-near --remote
 wrangler secret put BOT_TOKEN             # from @BotFather
