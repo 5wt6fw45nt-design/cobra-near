@@ -19,6 +19,19 @@ Cobra transcribes it, understands who, how much, what for and when, and shows yo
 
 **Cobra never holds funds or keys.** The client sends to a 1Click deposit address; NEAR Intents delivers exactly the invoiced USDC to the freelancer's NEAR account and refunds any excess or failed payment to the address the client gave.
 
+### Get paid where you want
+
+The freelancer picks the network once (⚙️ Settings → Where I get paid):
+
+| Payout | How the client pays | Settlement |
+|---|---|---|
+| **USDC · NEAR** (default) | any token, any chain | NEAR Intents 1Click, `EXACT_OUTPUT` |
+| **USDC · Arbitrum** | any token, any chain | NEAR Intents 1Click, `EXACT_OUTPUT` |
+| **BCH · Bitcoin Cash** | any token, any chain | NEAR Intents 1Click, BCH at the live price |
+| **MUSD · Mezo** | MUSD on Mezo, straight to the freelancer | Cobra watches MUSD `Transfer` logs for the exact amount |
+
+MUSD (Mezo's Bitcoin-backed stablecoin) is not routed by 1Click, so Mezo invoices are paid directly: the payment page shows the freelancer's address, the exact amount (tagged with the invoice id in the last wei so two equal invoices never collide), an EIP-681 QR, and a **Pay with my wallet** button that switches the wallet to Mezo and sends `transfer(to, amount)`. Cobra scans MUSD `Transfer` events to the freelancer every minute and alerts them with the explorer link. `MEZO_NETWORK` selects `testnet` (default, free to demo with faucet funds) or `mainnet`.
+
 ## Try it
 
 - Bot: **[@Cobrainvoicebot](https://t.me/Cobrainvoicebot)** on Telegram (NEAR mainnet: payments are real, use a small amount).
@@ -58,7 +71,7 @@ Design details:
 ## Run it
 
 ```bash
-npm test                                  # 16 tests, no network
+npm test                                  # 20 tests, no network
 wrangler d1 create cobra-near             # put the id in wrangler.toml
 wrangler d1 migrations apply cobra-near --remote
 wrangler secret put BOT_TOKEN             # from @BotFather
