@@ -4,7 +4,7 @@ import { createDb } from '../src/db.js';
 import { d1Shim } from '../scripts/d1-shim.js';
 import { createBot } from '../src/bot.js';
 import { loadConfig } from '../src/config.js';
-import { createIntents, isNearAccount, USDC } from '../src/intents.js';
+import { createIntents, isNearAccount, isPayoutAddress, normalizePayoutAddress, PAYOUTS, USDC } from '../src/intents.js';
 import { createPayments, PayError } from '../src/payments.js';
 import { budgetedAi, cleanEmail, normalizeDraft } from '../src/ai.js';
 import { verifyInitData, toCsv, toRow } from '../src/webapp.js';
@@ -53,6 +53,7 @@ const TOKENS = [
   { assetId: 'nep141:zec.omft.near', symbol: 'ZEC', blockchain: 'zec', decimals: 8, price: 1155 },
   { assetId: 'nep141:gnosis-eure.omft.near', symbol: 'EURe', blockchain: 'gnosis', decimals: 18, price: 1.12 },
   { assetId: 'nep141:weird.near', symbol: 'MEME', blockchain: 'near', decimals: 18, price: 0.01 },
+  { assetId: 'nep141:bch.omft.near', symbol: 'BCH', blockchain: 'bch', decimals: 8, price: 280 },
 ];
 
 test('1Click: curated pay options, EUR via the live EURe price, EXACT_OUTPUT quotes into USDC on NEAR', async () => {
@@ -63,13 +64,15 @@ test('1Click: curated pay options, EUR via the live EURe price, EXACT_OUTPUT quo
   });
   const it = createIntents({ base: 'https://1click.test', apiKey: 'KEY', rpc: 'https://rpc.test' }, fn);
   const opts = await it.payOptions();
-  assert.deepEqual(opts.map((o) => `${o.symbol}/${o.chain}`), ['USDC/near', 'USDT/tron', 'ZEC/zec'], 'only the curated list, in order');
+  assert.deepEqual(opts.map((o) => `${o.symbol}/${o.chain}`), ['USDC/near', 'USDT/tron', 'ZEC/zec', 'BCH/bch'], 'only the curated list, in order');
   assert.equal(opts[1].chainName, 'Tron');
-  assert.equal(await it.usdcUnits(35000, 'USD'), '350000000');
-  assert.equal(await it.usdcUnits(35000, 'EUR'), '392000000');
+  assert.equal(await it.payoutUnits(35000, 'USD'), '350000000');
+  assert.equal(await it.payoutUnits(35000, 'EUR'), '392000000');
+  assert.equal(await it.payoutUnits(35000, 'EUR', 'arb'), '392000000');
+  assert.equal(await it.payoutUnits(28000, 'USD', 'bch'), '100000000', '280 $ at 280 $/BCH = 1 BCH');
   assert.equal(calls.filter((c) => c.path === '/v0/tokens').length, 1, 'token list cached');
 
-  const q = await it.quote({ originAsset: 'nep141:tron-usdt.omft.near', symbol: 'USDT', usdc: '392000000', recipient: 'marta.near', refundTo: 'TRefund', deadline: Date.parse('2026-11-03T11:00:00Z') });
+  const q = await it.quote({ originAsset: 'nep141:tron-usdt.omft.near', symbol: 'USDT', amount: '392000000', recipient: 'marta.near', refundTo: 'TRefund', deadline: Date.parse('2026-11-03T11:00:00Z') });
   assert.equal(q.depositAddress, 'TDeposit1');
   assert.equal(q.signature, 'ed25519:sig');
   const body = calls.find((c) => c.path === '/v0/quote').body;
@@ -83,8 +86,24 @@ test('1Click: curated pay options, EUR via the live EURe price, EXACT_OUTPUT quo
   assert.equal(body.dry, false);
   assert.equal(calls.find((c) => c.path === '/v0/quote').headers['x-api-key'], 'KEY');
 
+  await it.quote({ originAsset: 'nep141:tron-usdt.omft.near', symbol: 'USDT', amount: '100000000', payout: 'bch', recipient: 'bitcoincash:qp', refundTo: 'TRefund', deadline: Date.now() });
+  const bch = calls.filter((c) => c.path === '/v0/quote').at(-1).body;
+  assert.equal(bch.destinationAsset, PAYOUTS.bch.asset);
+  assert.equal(bch.slippageTolerance, 100, 'paid out in a volatile coin: normal slippage');
+
   await it.status('MemoAddr', '123');
   assert.match(calls.at(-1).url, /depositAddress=MemoAddr&depositMemo=123$/);
+});
+
+test('payout addresses: Arbitrum and Bitcoin Cash formats, cashaddr gets its prefix', () => {
+  assert.ok(isPayoutAddress('arb', '0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c'));
+  assert.ok(!isPayoutAddress('arb', 'marta.near'));
+  assert.ok(isPayoutAddress('bch', 'qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a'));
+  assert.ok(isPayoutAddress('bch', 'bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a'));
+  assert.ok(!isPayoutAddress('bch', '1BoatSLRHtKNngkdXEeobR76b53LETtpyT'), 'legacy addresses are not accepted');
+  assert.equal(normalizePayoutAddress('bch', 'QPM2QSZNHKS23Z7629MMS6S4CWEF74VCWVY22GDX6A'), 'bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a');
+  assert.equal(normalizePayoutAddress('near', '@Marta.near'), 'marta.near');
+  assert.ok(!isPayoutAddress('sol', 'x'));
 });
 
 test('NEAR accounts: format check, then RPC; implicit accounts skip the RPC', async () => {
@@ -111,11 +130,11 @@ function fakeIntents() {
       { assetId: USDC, symbol: 'USDC', chain: 'near', chainName: 'NEAR' },
       { assetId: 'nep141:tron-usdt.omft.near', symbol: 'USDT', chain: 'tron', chainName: 'Tron' },
     ],
-    usdcUnits: async (cents, currency) => String(Math.ceil(cents * (currency === 'EUR' ? 1.12 : 1) * 10_000)),
+    payoutUnits: async (cents, currency) => String(Math.round(cents * (currency === 'EUR' ? 112 : 100) * 100)),
     async quote(p) {
       st.quotes++;
       st.lastQuote = p;
-      return { depositAddress: `DEP${st.quotes}`, amountInFormatted: (Number(p.usdc) / 1e6 * 1.001).toFixed(2), deadline: new Date(p.deadline).toISOString(), signature: 'sig' };
+      return { depositAddress: `DEP${st.quotes}`, amountInFormatted: (Number(p.amount) / 1e6 * 1.001).toFixed(2), deadline: new Date(p.deadline).toISOString(), signature: 'sig' };
     },
     async status(address) {
       return st.statuses[address] || { status: 'PENDING_DEPOSIT', swapDetails: {} };
@@ -175,33 +194,40 @@ function setup() {
   return { cfg, d1, db, bot, api, sent: api.sent, intents, payments, msg, tap, last, buttons, ME, at: (t) => (now = t) };
 }
 
-/** Voice/text → draft → first time asks the NEAR account → payment link. */
+/** Voice/text → draft → first time asks where to get paid → payment link. */
 async function invoiceMarta(s) {
   await s.msg('Factura a Marta 350 euros por el logo');
   await s.tap(s.buttons().find((b) => b.callback_data?.startsWith('send:')).callback_data);
-  if (/cuenta de NEAR/.test(s.last().text)) await s.msg('augusto.near');
+  if (/Dónde quieres <b>cobrar/.test(s.last().text)) {
+    await s.tap(s.buttons().find((b) => b.callback_data.startsWith('po:near:')).callback_data);
+    await s.msg('augusto.near');
+  }
   return s.db.invoiceById(1);
 }
 
 // --- Conversation ---
 
-test('voice/text → draft → asks the NEAR account once → payment link to share', async () => {
+test('voice/text → draft → asks where to get paid once → payment link to share', async () => {
   const s = setup();
   await s.msg('Factura a Marta 350 euros por el logo');
   assert.match(s.last().text, /Borrador de factura/);
   assert.match(s.last().text, /350,00\s€/);
-  assert.match(s.last().text, /USDC en NEAR/);
+  assert.match(s.last().text, /Cobras en USDC · NEAR/);
   assert.ok(!/correo/.test(s.last().text), 'no email needed');
   const send = s.buttons().find((b) => b.callback_data.startsWith('send:'));
   await s.tap(send.callback_data);
-  assert.match(s.last().text, /cuenta de NEAR/);
+  assert.match(s.last().text, /Dónde quieres <b>cobrar/);
+  assert.deepEqual(s.buttons().map((b) => b.text), ['USDC · NEAR', 'USDC · Arbitrum', 'BCH · Bitcoin Cash']);
   assert.equal(await s.db.invoiceById(1), null, 'nothing created yet');
+  await s.tap(s.buttons()[0].callback_data);
+  assert.match(s.last().text, /cuenta de NEAR/);
 
   await s.msg('nadie.near');
   assert.match(s.last().text, /No encuentro esa cuenta/);
   await s.msg('Augusto.near');
   const inv = await s.db.invoiceById(1);
-  assert.equal(inv.near_account, 'augusto.near');
+  assert.equal(inv.payout_address, 'augusto.near');
+  assert.equal(inv.payout_chain, 'near');
   assert.equal(inv.amount_cents, 35000);
   assert.equal(inv.currency, 'EUR');
   assert.equal(inv.pay_url, 'https://cobra.test/pay/tok00000000000000000001');
@@ -233,6 +259,7 @@ test('fix a draft by voice/text, cancel, and the amount limit', async () => {
   s.cfg.maxAmount = 100;
   await s.msg('Factura a Marta 350 euros');
   await s.tap(s.buttons().find((b) => b.callback_data.startsWith('send:')).callback_data);
+  await s.tap(s.buttons().find((b) => b.callback_data.startsWith('po:near:')).callback_data);
   await s.msg('augusto.near');
   assert.match(s.last().text, /Supera el límite/);
 });
@@ -246,7 +273,7 @@ test('payment page flow: one deposit address per asset+refund, reused, and only 
   const d1 = await s.payments.startPayment(inv, { assetId: usdt, refundTo: 'TMyAddr' });
   assert.equal(d1.address, 'DEP1');
   assert.equal(d1.chainName, 'Tron');
-  assert.equal(d1.usdc, '392.00', '350 € at 1.12');
+  assert.equal(s.intents.st.lastQuote.amount, '392000000', '350 € at 1.12');
   assert.equal(s.intents.st.lastQuote.recipient, 'augusto.near');
   assert.equal(s.intents.st.lastQuote.refundTo, 'TMyAddr');
   assert.equal((await s.payments.startPayment(inv, { assetId: usdt, refundTo: 'TMyAddr' })).address, 'DEP1', 'reused');
@@ -432,18 +459,25 @@ test('the daily AI budget is shared by all users and resets the next day', async
   assert.equal(calls, 3);
 });
 
-test('settings: language, currency and NEAR account', async () => {
+test('settings: language, currency and where I get paid (NEAR, Arbitrum, BCH)', async () => {
   const s = setup();
   await s.msg('⚙️ Ajustes');
   assert.match(s.last().text, /Moneda de las facturas: EUR/);
   await s.tap('cur:USD');
   assert.match(s.last().text, /Moneda de las facturas: USD/);
-  await s.tap('near');
-  assert.match(s.last().text, /cuenta de NEAR/);
+  await s.tap('po');
+  assert.match(s.last().text, /Dónde quieres <b>cobrar/);
+  await s.tap('po:arb:0');
+  assert.match(s.last().text, /dirección de <b>USDC · Arbitrum/);
+  await s.msg('0x123');
+  assert.match(s.last().text, /no parece una dirección de Arbitrum/);
+  await s.msg('0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c');
+  assert.match(s.last().text, /Cobrarás en <b>USDC · Arbitrum<\/b>/);
+  await s.tap('po:near:0');
   await s.msg('marta.near');
-  assert.match(s.last().text, /Los pagos irán a <code>marta.near<\/code>/);
+  assert.match(s.last().text, /Cobrarás en <b>USDC · NEAR<\/b> en <code>marta.near<\/code>/);
   await s.tap('lang:en');
-  assert.match(s.last().text, /NEAR account: <code>marta.near<\/code>/);
+  assert.match(s.last().text, /Get paid in: USDC · NEAR · <code>marta.near<\/code>/);
   await s.msg('❓ How it works');
   assert.match(s.last().text, /you receive USDC on NEAR/);
 });

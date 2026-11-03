@@ -1,9 +1,10 @@
-// Cobra's conversation: voice/text → invoice draft → payment link (any crypto in, USDC on NEAR out), payment alerts, reminders, monthly totals.
+// Cobra's conversation: voice/text → invoice draft → payment link (any crypto in, USDC on NEAR / Arbitrum or BCH out), payment alerts, reminders, monthly totals.
 
-import { T, esc, draftCard, mainKeyboard, total, describe, shareUrl } from './render.js';
+import { T, esc, draftCard, mainKeyboard, total, describe, shareUrl, payoutLabel } from './render.js';
 import { message } from './telegram.js';
 import { transcribe, understand, applyFix, writeReminder } from './ai.js';
 import { newPayToken } from './payments.js';
+import { PAYOUTS, isPayoutAddress, normalizePayoutAddress } from './intents.js';
 import { CURRENCIES } from './config.js';
 
 const HOUR = 3_600_000;
@@ -46,13 +47,13 @@ export function createBot({ api, db, cfg, payments, intents, ai = null, clock = 
     await db.pruneDrafts(u.id, now - 7 * DAY);
     const id = await db.addDraft(u.id, draft, heard, now);
     await db.setPending(u.id, null);
-    return say(draftCard(draft, u.lang), draftButtons(u.lang, id));
+    return say(draftCard(draft, u.lang, u.payout_chain), draftButtons(u.lang, id));
   }
 
   async function refreshDraft(chatId, u, draftId, data) {
     await db.updateDraft(draftId, data);
     await db.setPending(u.id, null);
-    return reply(chatId, draftCard(data, u.lang), draftButtons(u.lang, draftId));
+    return reply(chatId, draftCard(data, u.lang, u.payout_chain), draftButtons(u.lang, draftId));
   }
 
   /** Turns a draft into an invoice with its own payment page. */
@@ -61,17 +62,14 @@ export function createBot({ api, db, cfg, payments, intents, ai = null, clock = 
     const dr = await db.getDraft(draftId, u.id);
     if (!dr) return edit(chatId, messageId, t.gone);
     if (!cfg.publicUrl) return reply(chatId, t.notConfigured);
-    if (!u.near_account) {
-      await db.setPending(u.id, `near:${draftId}`);
-      return reply(chatId, t.askNear);
-    }
+    if (!u.payout_address) return askPayout(chatId, u, draftId);
     const d = dr.data;
     if (total(d.items) > cfg.maxAmount * 100) return reply(chatId, t.tooMuch(cfg.maxAmount), draftButtons(u.lang, draftId));
     const payToken = token();
     const inv = {
       user_id: u.id, pay_token: payToken, number: String((await db.countInvoices(u.id)) + 1).padStart(4, '0'),
       client_name: d.client_name, client_email: d.client_email, description: describe(d.items), amount_cents: total(d.items), currency: d.currency,
-      near_account: u.near_account, due_date: d.due_date, pay_url: `${cfg.publicUrl}/pay/${payToken}`, created_at: now,
+      payout_chain: u.payout_chain, payout_address: u.payout_address, due_date: d.due_date, pay_url: `${cfg.publicUrl}/pay/${payToken}`, created_at: now,
     };
     const id = await db.addInvoice(inv);
     await db.saveClient(u.id, d.client_name, d.client_email, now);
@@ -144,21 +142,27 @@ export function createBot({ api, db, cfg, payments, intents, ai = null, clock = 
     const rows = [
       [{ text: t.btnLang, callback_data: `lang:${u.lang === 'es' ? 'en' : 'es'}` }],
       CURRENCIES.map((c) => ({ text: c === u.currency ? `• ${c}` : c, callback_data: `cur:${c}` })),
-      [{ text: t.btnNear, callback_data: 'near' }],
+      [{ text: t.btnPayout, callback_data: 'po' }],
       [{ text: t.btnBusiness, callback_data: 'biz' }],
     ];
     return edit(chatId, messageId, t.settings(u), kb(rows));
   }
 
-  /** Saves the NEAR account and, if it was asked while creating an invoice, finishes that invoice. */
-  async function setNearAccount(chatId, u, text, draftId, now) {
+  /** Where the freelancer gets paid: one button per network; `draftId` resumes that invoice afterwards. */
+  function askPayout(chatId, u, draftId = 0) {
+    return reply(chatId, T(u.lang).askPayout, kb(Object.keys(PAYOUTS).map((chain) => [{ text: payoutLabel(chain), callback_data: `po:${chain}:${draftId}` }])));
+  }
+
+  /** Saves the payout address and, if it was asked while creating an invoice, finishes that invoice. */
+  async function setPayoutAddress(chatId, u, chain, text, draftId, now) {
     const t = T(u.lang);
-    const account = String(text).trim().toLowerCase().replace(/^@/, '');
-    if (!(await intents.accountExists(account).catch(() => false))) return reply(chatId, t.badNear);
-    await db.setNear(u.id, account);
+    const address = normalizePayoutAddress(chain, text);
+    const ok = isPayoutAddress(chain, address) && (chain !== 'near' || await intents.accountExists(address).catch(() => false));
+    if (!ok) return reply(chatId, t.badAddress(chain));
+    await db.setPayout(u.id, chain, address);
     await db.setPending(u.id, null);
-    await reply(chatId, t.nearSaved(account));
-    if (draftId && await db.getDraft(draftId, u.id)) return sendDraft(chatId, null, { ...u, near_account: account }, draftId, now);
+    await reply(chatId, t.payoutSaved(chain, address));
+    if (draftId && await db.getDraft(draftId, u.id)) return sendDraft(chatId, null, { ...u, payout_chain: chain, payout_address: address }, draftId, now);
     return null;
   }
 
@@ -171,11 +175,11 @@ export function createBot({ api, db, cfg, payments, intents, ai = null, clock = 
     const drop = () => (statusId ? api.call('deleteMessage', { chat_id: chatId, message_id: statusId }).catch(() => {}) : null);
 
     // Answers to a question we asked
-    const [kind, ref] = String(u.pending || '').split(':');
-    if (kind === 'near') {
+    const [kind, ref, ref2] = String(u.pending || '').split(':');
+    if (kind === 'addr' && PAYOUTS[ref]) {
       if (/^\S+$/.test(text.trim())) {
         await drop();
-        return setNearAccount(chatId, u, text, Number(ref), now);
+        return setPayoutAddress(chatId, u, ref, text, Number(ref2), now);
       }
       await db.setPending(u.id, null); // a sentence: they moved on, treat it as a new message
     } else if (kind === 'fix') {
@@ -238,7 +242,7 @@ export function createBot({ api, db, cfg, payments, intents, ai = null, clock = 
     if (!chatId) return;
     let u = await db.upsertUser(q.from, now);
     const t = T(u.lang);
-    const [cmd, arg] = String(q.data || '').split(':');
+    const [cmd, arg, arg2] = String(q.data || '').split(':');
     const id = Number(arg);
     switch (cmd) {
       case 'send': return sendDraft(chatId, messageId, u, id, now);
@@ -264,9 +268,10 @@ export function createBot({ api, db, cfg, payments, intents, ai = null, clock = 
         if (CURRENCIES.includes(arg)) await db.setCurrency(u.id, arg);
         return sendSettings(chatId, await db.getUser(u.id), messageId);
       }
-      case 'near': {
-        await db.setPending(u.id, 'near:0');
-        return reply(chatId, t.askNear);
+      case 'po': {
+        if (!PAYOUTS[arg]) return askPayout(chatId, u);
+        await db.setPending(u.id, `addr:${arg}:${Number(arg2) || 0}`);
+        return reply(chatId, t.askAddress(arg));
       }
       case 'biz': {
         await db.setPending(u.id, 'business');

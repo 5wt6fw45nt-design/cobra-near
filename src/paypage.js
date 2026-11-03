@@ -1,5 +1,7 @@
 // The page the client opens: pick a token and a chain, get a deposit address, watch the payment land.
 
+import { payoutLabel } from './render.js';
+
 const QR = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
 
 /** JSON that is safe inside a <script> tag. */
@@ -14,7 +16,8 @@ export const publicInvoice = (inv, owner) => ({
   amount: inv.amount_cents / 100,
   currency: inv.currency,
   due: inv.due_date,
-  recipient: inv.near_account,
+  recipient: inv.payout_address,
+  payout: payoutLabel(inv.payout_chain),
   status: inv.status,
   paidWith: inv.paid_with,
   paidTx: inv.paid_tx,
@@ -111,8 +114,8 @@ const INV = ${embed(invoice)};
 const OPTIONS = ${embed(options)};
 const L = (navigator.language || '').startsWith('es') ? 'es' : ${embed(lang === 'es' ? 'es' : 'en')};
 const TX = {
-  en: { tagline: 'pay with any crypto', from: (f, n) => 'Invoice' + (n ? ' #' + n : '') + ' from ' + f, to: 'To', due: 'Due', receives: 'Received as', asset: 'Pay with', refund: 'Your address on that chain', refundHint: (c) => 'Only used to send money back if something goes wrong (or the excess, if you send more). Your ' + c + ' address.', nearHint: 'Your NEAR account, e.g. you.near', go: 'Get payment address', send: 'Send exactly', to2: 'To this address (tap to copy)', memo: 'Memo / tag (required)', expires: (m) => 'This address waits for your payment ' + m + ' min. After that, start again.', waiting: 'Waiting for your payment…', known: 'Payment seen, confirming…', processing: 'Payment received, converting to USDC…', incomplete: 'Less than the amount arrived. Send the rest to the same address.', success: 'Paid', refunded: 'The payment was refunded to your address.', failed: 'Something failed; your funds are refunded to your address.', back: 'Pay with something else', copied: 'Copied', paidTitle: 'Invoice paid', thanks: 'Thank you!', seeTx: 'See the transaction', closed: 'This invoice is no longer open.', errAsset: 'Choose what you pay with.', errRefund: 'Write your address on that chain.', errGeneric: 'That did not work. Check the address and try again.', errLimit: 'Too many attempts for this invoice. Ask for a new link.', foot: 'Powered by NEAR Intents · Cobra never holds funds', usdc: 'USDC on NEAR' },
-  es: { tagline: 'paga con cualquier cripto', from: (f, n) => 'Factura' + (n ? ' n.º ' + n : '') + ' de ' + f, to: 'Para', due: 'Vence', receives: 'Se recibe como', asset: 'Pagar con', refund: 'Tu dirección en esa red', refundHint: (c) => 'Solo se usa para devolverte el dinero si algo falla (o lo que sobre, si mandas de más). Tu dirección de ' + c + '.', nearHint: 'Tu cuenta de NEAR, por ejemplo tu.near', go: 'Obtener dirección de pago', send: 'Envía exactamente', to2: 'A esta dirección (toca para copiar)', memo: 'Memo / etiqueta (obligatorio)', expires: (m) => 'Esta dirección espera tu pago ' + m + ' min. Después, vuelve a empezar.', waiting: 'Esperando tu pago…', known: 'Pago visto, confirmando…', processing: 'Pago recibido, convirtiendo a USDC…', incomplete: 'Ha llegado menos del importe. Manda el resto a la misma dirección.', success: 'Pagado', refunded: 'El pago se ha devuelto a tu dirección.', failed: 'Algo ha fallado; tus fondos se devuelven a tu dirección.', back: 'Pagar con otra cosa', copied: 'Copiado', paidTitle: 'Factura pagada', thanks: '¡Gracias!', seeTx: 'Ver la transacción', closed: 'Esta factura ya no está abierta.', errAsset: 'Elige con qué pagas.', errRefund: 'Escribe tu dirección en esa red.', errGeneric: 'No ha funcionado. Revisa la dirección y vuelve a intentarlo.', errLimit: 'Demasiados intentos para esta factura. Pide un enlace nuevo.', foot: 'Funciona con NEAR Intents · Cobra nunca toca los fondos', usdc: 'USDC en NEAR' },
+  en: { tagline: 'pay with any crypto', from: (f, n) => 'Invoice' + (n ? ' #' + n : '') + ' from ' + f, to: 'To', due: 'Due', receives: 'Received as', asset: 'Pay with', refund: 'Your address on that chain', refundHint: (c) => 'Only used to send money back if something goes wrong (or the excess, if you send more). Your ' + c + ' address.', nearHint: 'Your NEAR account, e.g. you.near', go: 'Get payment address', send: 'Send exactly', to2: 'To this address (tap to copy)', memo: 'Memo / tag (required)', expires: (m) => 'This address waits for your payment ' + m + ' min. After that, start again.', waiting: 'Waiting for your payment…', known: 'Payment seen, confirming…', processing: 'Payment received, converting…', incomplete: 'Less than the amount arrived. Send the rest to the same address.', success: 'Paid', refunded: 'The payment was refunded to your address.', failed: 'Something failed; your funds are refunded to your address.', back: 'Pay with something else', copied: 'Copied', paidTitle: 'Invoice paid', thanks: 'Thank you!', seeTx: 'See the transaction', closed: 'This invoice is no longer open.', errAsset: 'Choose what you pay with.', errRefund: 'Write your address on that chain.', errGeneric: 'That did not work. Check the address and try again.', errLimit: 'Too many attempts for this invoice. Ask for a new link.', foot: 'Powered by NEAR Intents · Cobra never holds funds' },
+  es: { tagline: 'paga con cualquier cripto', from: (f, n) => 'Factura' + (n ? ' n.º ' + n : '') + ' de ' + f, to: 'Para', due: 'Vence', receives: 'Se recibe como', asset: 'Pagar con', refund: 'Tu dirección en esa red', refundHint: (c) => 'Solo se usa para devolverte el dinero si algo falla (o lo que sobre, si mandas de más). Tu dirección de ' + c + '.', nearHint: 'Tu cuenta de NEAR, por ejemplo tu.near', go: 'Obtener dirección de pago', send: 'Envía exactamente', to2: 'A esta dirección (toca para copiar)', memo: 'Memo / etiqueta (obligatorio)', expires: (m) => 'Esta dirección espera tu pago ' + m + ' min. Después, vuelve a empezar.', waiting: 'Esperando tu pago…', known: 'Pago visto, confirmando…', processing: 'Pago recibido, convirtiendo…', incomplete: 'Ha llegado menos del importe. Manda el resto a la misma dirección.', success: 'Pagado', refunded: 'El pago se ha devuelto a tu dirección.', failed: 'Algo ha fallado; tus fondos se devuelven a tu dirección.', back: 'Pagar con otra cosa', copied: 'Copiado', paidTitle: 'Factura pagada', thanks: '¡Gracias!', seeTx: 'Ver la transacción', closed: 'Esta factura ya no está abierta.', errAsset: 'Elige con qué pagas.', errRefund: 'Escribe tu dirección en esa red.', errGeneric: 'No ha funcionado. Revisa la dirección y vuelve a intentarlo.', errLimit: 'Demasiados intentos para esta factura. Pide un enlace nuevo.', foot: 'Funciona con NEAR Intents · Cobra nunca toca los fondos' },
 }[L];
 const $ = (id) => document.getElementById(id);
 const fmt = (n, c) => new Intl.NumberFormat(L === 'es' ? 'es-ES' : 'en-US', { style: 'currency', currency: c }).format(n);
@@ -125,7 +128,7 @@ $('amount').textContent = fmt(INV.amount, INV.currency);
 $('desc').textContent = INV.description;
 $('facts').append(row(TX.to, INV.to));
 if (INV.due) $('facts').append(row(TX.due, day(INV.due)));
-$('facts').append(row(TX.receives, TX.usdc + ' · ' + INV.recipient));
+$('facts').append(row(TX.receives, INV.payout + ' · ' + INV.recipient));
 $('lAsset').textContent = TX.asset; $('lRefund').textContent = TX.refund; $('go').textContent = TX.go; $('back').textContent = TX.back;
 $('lSend').textContent = TX.send; $('lTo').textContent = TX.to2; $('lMemo').textContent = TX.memo; $('foot').textContent = TX.foot;
 for (const o of OPTIONS) { const el = document.createElement('option'); el.value = o.assetId; el.textContent = o.symbol + ' · ' + o.chainName; $('asset').append(el); }

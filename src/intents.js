@@ -1,9 +1,34 @@
-// NEAR Intents 1Click API: the client pays with any token on any chain, the freelancer receives USDC on NEAR.
+// NEAR Intents 1Click API: the client pays with any token on any chain, the freelancer receives USDC on NEAR
+// (or USDC on Arbitrum, or BCH: see PAYOUTS).
 // Docs: https://docs.near-intents.org/near-intents/integration/distribution-channels/1click-api
 
 export const USDC = 'nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1'; // USDC on NEAR, 6 decimals
 const EURE = { symbol: 'EURe', blockchain: 'gnosis' }; // its USD price gives us the euro rate
 export const FINAL = ['SUCCESS', 'REFUNDED', 'FAILED'];
+
+/** Where the freelancer can be paid. Stablecoins settle 1:1 with the invoice; BCH at the live price when the client pays. */
+export const PAYOUTS = {
+  near: { asset: USDC, symbol: 'USDC', decimals: 6, stable: true, chainName: 'NEAR', example: 'marta.near' },
+  arb: { asset: 'nep141:arb-0xaf88d065e77c8cc2239327c5edb3a432268e5831.omft.near', symbol: 'USDC', decimals: 6, stable: true, chainName: 'Arbitrum', example: '0x1234…abcd' },
+  bch: { asset: 'nep141:bch.omft.near', symbol: 'BCH', decimals: 8, stable: false, chainName: 'Bitcoin Cash', example: 'bitcoincash:qp…' },
+};
+
+/** Format check for a payout address (NEAR accounts are also checked on chain, see accountExists). */
+export function isPayoutAddress(chain, s) {
+  const a = String(s || '').trim();
+  if (chain === 'near') return isNearAccount(a);
+  if (chain === 'arb') return /^0x[0-9a-fA-F]{40}$/.test(a);
+  if (chain === 'bch') return /^(bitcoincash:)?[qp][02-9ac-hj-np-z]{41}$/.test(a.toLowerCase());
+  return false;
+}
+
+/** How addresses are stored: NEAR and cashaddr in lowercase with the bitcoincash: prefix, EVM as given. */
+export function normalizePayoutAddress(chain, s) {
+  const a = String(s || '').trim();
+  if (chain === 'near') return a.toLowerCase().replace(/^@/, '');
+  if (chain === 'bch') return a.toLowerCase().startsWith('bitcoincash:') ? a.toLowerCase() : `bitcoincash:${a.toLowerCase()}`;
+  return a;
+}
 
 /** What the payment page offers, in this order. Anything not live in /v0/tokens is skipped. */
 export const PAY_WITH = [
@@ -67,35 +92,45 @@ export function createIntents({ base, apiKey, rpc }, fetchFn = (...a) => fetch(.
     return out;
   }
 
-  /** Invoice amount (cents in EUR or USD) → USDC base units (6 decimals). Euros use the live EURe price. */
-  async function usdcUnits(cents, currency) {
-    let rate = 1;
+  /** Invoice amount (cents in EUR or USD) → base units of the payout asset. Euros use the live EURe price, BCH its live price. */
+  async function payoutUnits(cents, currency, chain = 'near') {
+    const p = PAYOUTS[chain];
+    if (!p) throw new IntentsError(400, { message: `unknown payout chain ${chain}` });
+    const list = await tokens();
+    let usd = cents / 100;
     if (currency === 'EUR') {
-      const eure = (await tokens()).find((x) => x.symbol === EURE.symbol && x.blockchain === EURE.blockchain);
+      const eure = list.find((x) => x.symbol === EURE.symbol && x.blockchain === EURE.blockchain);
       if (!eure?.price) throw new IntentsError(503, { message: 'no EUR rate' });
-      rate = eure.price;
+      usd *= eure.price;
     }
-    return String(Math.ceil(Number((cents * rate * 10_000).toFixed(6)))); // toFixed: 35000 × 1.12 must not round up to …001
+    let amount = usd;
+    if (!p.stable) {
+      const price = list.find((x) => x.assetId === p.asset)?.price;
+      if (!price) throw new IntentsError(503, { message: `no ${p.symbol} price` });
+      amount = usd / price;
+    }
+    return String(Math.ceil(Number((amount * 10 ** p.decimals).toFixed(6)))); // toFixed: 350 € × 1.12 must not round up to …001
   }
 
   return {
     tokens,
     payOptions,
-    usdcUnits,
+    payoutUnits,
 
     /**
      * A real quote with a deposit address. The client sends `amountIn` of `originAsset` there;
-     * exactly `usdc` units reach `recipient` on NEAR, any excess goes back to `refundTo`.
+     * exactly `amount` units of the payout asset reach `recipient`, any excess goes back to `refundTo`.
      */
-    async quote({ originAsset, symbol, usdc, recipient, refundTo, deadline, dry = false }) {
+    async quote({ originAsset, symbol, amount, payout = 'near', recipient, refundTo, deadline, dry = false }) {
+      const p = PAYOUTS[payout];
       const out = await request('POST', '/v0/quote', {
         dry,
         swapType: 'EXACT_OUTPUT',
-        slippageTolerance: STABLE.has(symbol) ? 10 : 100,
+        slippageTolerance: STABLE.has(symbol) && p.stable ? 10 : 100,
         originAsset,
         depositType: 'ORIGIN_CHAIN',
-        destinationAsset: USDC,
-        amount: usdc,
+        destinationAsset: p.asset,
+        amount,
         recipient,
         recipientType: 'DESTINATION_CHAIN',
         refundTo,

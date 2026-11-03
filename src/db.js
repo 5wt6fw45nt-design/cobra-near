@@ -22,7 +22,7 @@ export function createDb(d1) {
     setLang: (id, lang) => run('UPDATE users SET lang = ? WHERE id = ?', lang, id),
     setCurrency: (id, c) => run('UPDATE users SET currency = ? WHERE id = ?', c, id),
     setBusiness: (id, name) => run('UPDATE users SET business_name = ? WHERE id = ?', name, id),
-    setNear: (id, account) => run('UPDATE users SET near_account = ? WHERE id = ?', account, id),
+    setPayout: (id, chain, address) => run('UPDATE users SET payout_chain = ?, payout_address = ? WHERE id = ?', chain, address, id),
 
     clientNames: async (userId) => (await all('SELECT name FROM clients WHERE user_id = ? ORDER BY updated_at DESC LIMIT 30', userId)).map((r) => r.name),
     findClient: (userId, name) => first('SELECT * FROM clients WHERE user_id = ? AND name_key = ?', userId, nameKey(name)),
@@ -47,9 +47,9 @@ export function createDb(d1) {
 
     async addInvoice(i) {
       const r = await run(
-        `INSERT INTO invoices (user_id, pay_token, number, client_name, client_email, description, amount_cents, currency, near_account, due_date, status, pay_url, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SENT', ?, ?)`,
-        i.user_id, i.pay_token, i.number, i.client_name, i.client_email ?? null, i.description, i.amount_cents, i.currency, i.near_account, i.due_date, i.pay_url, i.created_at,
+        `INSERT INTO invoices (user_id, pay_token, number, client_name, client_email, description, amount_cents, currency, payout_chain, payout_address, due_date, status, pay_url, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SENT', ?, ?)`,
+        i.user_id, i.pay_token, i.number, i.client_name, i.client_email ?? null, i.description, i.amount_cents, i.currency, i.payout_chain, i.payout_address, i.due_date, i.pay_url, i.created_at,
       );
       return r.meta.last_row_id;
     },
@@ -82,9 +82,9 @@ export function createDb(d1) {
 
     // --- deposits: one per "pay with X" the client starts on the payment page ---
     addDeposit: (d) => run(
-      `INSERT INTO deposits (address, memo, invoice_id, origin_asset, symbol, chain, refund_to, amount_in, usdc, quote, deadline, created_at)
+      `INSERT INTO deposits (address, memo, invoice_id, origin_asset, symbol, chain, refund_to, amount_in, amount_out, quote, deadline, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      d.address, d.memo ?? null, d.invoice_id, d.origin_asset, d.symbol, d.chain, d.refund_to, d.amount_in, d.usdc, d.quote, d.deadline, d.created_at,
+      d.address, d.memo ?? null, d.invoice_id, d.origin_asset, d.symbol, d.chain, d.refund_to, d.amount_in, d.amount_out, d.quote, d.deadline, d.created_at,
     ),
     getDeposit: (address) => first('SELECT * FROM deposits WHERE address = ?', address),
     depositsFor: (invoiceId) => all('SELECT * FROM deposits WHERE invoice_id = ? ORDER BY created_at DESC LIMIT 50', invoiceId),

@@ -1,5 +1,7 @@
 // Every text Cobra says, in English and Spanish, plus formatting helpers.
 
+import { PAYOUTS } from './intents.js';
+
 export const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export const fmtMoney = (cents, currency, lang) =>
@@ -8,6 +10,13 @@ export const fmtMoney = (cents, currency, lang) =>
 export const fmtDate = (ymd, lang) => (ymd
   ? new Intl.DateTimeFormat(lang === 'es' ? 'es-ES' : 'en-US', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${ymd}T12:00:00Z`))
   : null);
+
+/** "USDC · NEAR", "BCH · Bitcoin Cash" */
+export const payoutLabel = (chain) => {
+  const p = PAYOUTS[chain] || PAYOUTS.near;
+  return `${p.symbol} · ${p.chainName}`;
+};
+const payoutSymbol = (chain) => (PAYOUTS[chain] || PAYOUTS.near).symbol;
 
 export const total = (items) => items.reduce((s, it) => s + it.cents * it.qty, 0);
 
@@ -22,7 +31,7 @@ const EN = {
   btnHelp: '❓ How it works',
   btnSettings: '⚙️ Settings',
   welcome: (name) => `Hi ${esc(name || 'there')}! I'm <b>Cobra</b> 🧾🎙️\n\nI bill your clients and chase payments for you. Your clients pay with <b>any crypto on any chain</b> (USDC, USDT, BTC, ETH, SOL, ZEC…) and you receive <b>USDC on NEAR</b>, thanks to NEAR Intents.\n\nJust send me a voice note or a text like:\n\n<i>“Bill Marta Garcia 350 dollars for the logo design, due in 15 days.”</i>\n\nI'll show you the invoice first. Nothing is created until you tap ✅.`,
-  help: `<b>What I do</b>\n\n🎙️ <b>Send a voice note or a text</b> saying who to bill, how much and for what. I prepare the invoice and show it to you.\n✅ Tap <b>Create</b> and you get a <b>payment link</b> to send your client.\n🌐 Your client pays with whatever they have: USDC or USDT on most chains, BTC, ETH, SOL, NEAR, ZEC… NEAR Intents converts it and <b>you receive USDC on NEAR</b>.\n💸 I tell you <b>the moment you're paid</b>, with the transaction.\n🔔 <b>Who owes me</b> lists unpaid invoices; I write a polite reminder you can forward.\n📊 <b>This month</b>: what you billed and collected.\n\nNo wallet connection, no keys: Cobra never holds your money.`,
+  help: `<b>What I do</b>\n\n🎙️ <b>Send a voice note or a text</b> saying who to bill, how much and for what. I prepare the invoice and show it to you.\n✅ Tap <b>Create</b> and you get a <b>payment link</b> to send your client.\n🌐 Your client pays with whatever they have: USDC or USDT on most chains, BTC, ETH, SOL, NEAR, ZEC… NEAR Intents converts it and <b>you receive USDC on NEAR</b> (or USDC on Arbitrum, or BCH).\n💸 I tell you <b>the moment you're paid</b>, with the transaction.\n🔔 <b>Who owes me</b> lists unpaid invoices; I write a polite reminder you can forward.\n📊 <b>This month</b>: what you billed and collected.\n\nNo wallet connection, no keys: Cobra never holds your money.`,
   thinking: '🎙️ Listening…',
   draftTitle: '🧾 <b>Invoice draft</b>',
   to: 'To',
@@ -30,18 +39,19 @@ const EN = {
   due: 'Due',
   onReceipt: 'on receipt',
   note: 'Note',
-  settles: (lang) => (lang === 'es' ? 'Cobras en USDC en NEAR' : 'You receive USDC on NEAR'),
+  settles: (chain) => `You receive ${payoutLabel(chain)}`,
   btnSend: '✅ Create payment link',
   btnFix: '✏️ Fix',
   btnCancel: '❌ Cancel',
-  askNear: 'Which <b>NEAR account</b> should receive the USDC? For example <code>marta.near</code>. You only tell me once.',
-  badNear: "I couldn't find that NEAR account. Check it and send it again, e.g. <code>marta.near</code>.",
-  nearSaved: (a) => `✅ Payments will go to <code>${esc(a)}</code>.`,
+  askPayout: 'Where do you want to <b>get paid</b>? Your clients can still pay with anything. You only tell me once (you can change it in ⚙️ Settings).',
+  askAddress: (chain) => (chain === 'near' ? 'Send me your <b>NEAR account</b>, e.g. <code>marta.near</code>.' : `Send me your <b>${payoutLabel(chain)}</b> address, e.g. <code>${esc(PAYOUTS[chain].example)}</code>.`),
+  badAddress: (chain) => (chain === 'near' ? "I couldn't find that NEAR account. Check it and send it again, e.g. <code>marta.near</code>." : `That doesn't look like a ${PAYOUTS[chain].chainName} address. Check it and send it again.`),
+  payoutSaved: (chain, a) => `✅ You'll get paid in <b>${payoutLabel(chain)}</b> at <code>${esc(a)}</code>.`,
   askFix: 'Tell me what to change (by voice or text), e.g. “make it 400” or “due next Friday”.',
   noClient: 'Who should I bill? Tell me the client\'s name, the amount and what it\'s for.',
   noAmount: (name) => `How much should I bill ${esc(name || 'them')}, and for what?`,
   tooMuch: (max) => `That's above the ${max} limit per invoice. Fix the amount and try again.`,
-  sent: (inv, lang) => `✅ <b>Payment link ready</b> for ${esc(inv.client_name)}\n${fmtMoney(inv.amount_cents, inv.currency, lang)} · ${esc(inv.description)}\nTo: <code>${esc(inv.near_account)}</code>\n\nSend it to your client: they pay with any crypto, you get USDC. I'll tell you the moment it's paid.`,
+  sent: (inv, lang) => `✅ <b>Payment link ready</b> for ${esc(inv.client_name)}\n${fmtMoney(inv.amount_cents, inv.currency, lang)} · ${esc(inv.description)}\nTo: ${payoutLabel(inv.payout_chain)} · <code>${esc(inv.payout_address)}</code>\n\nSend it to your client: they pay with any crypto, you get ${payoutSymbol(inv.payout_chain)}. I'll tell you the moment it's paid.`,
   btnShare: '📤 Send to client',
   btnPayLink: '🔗 Payment page',
   btnInPerson: '📱 Get paid in person',
@@ -49,9 +59,9 @@ const EN = {
   inPerson: (inv, lang) => `📱 Open this page on your phone and show it to ${esc(inv.client_name)}. They scan the QR with their wallet and pay ${fmtMoney(inv.amount_cents, inv.currency, lang)}.`,
   cancelled: 'Draft discarded. 👍',
   gone: 'That draft is no longer available. Send me a new one.',
-  paid: (inv, lang) => `💸 <b>${esc(inv.client_name)} paid you ${fmtMoney(inv.amount_cents, inv.currency, lang)}</b>\n${esc(inv.description)}\nThey sent ${esc(inv.paid_with)} · you received USDC in <code>${esc(inv.near_account)}</code>.`,
-  paidAgain: (inv) => `💸 Another payment for an invoice that was already paid (${esc(inv.client_name)} · ${esc(inv.description)}): ${esc(inv.paid_with)}. The USDC is in <code>${esc(inv.near_account)}</code>.`,
-  incoming: (inv, what) => `⏳ <b>${esc(inv.client_name)} is paying</b>: ${esc(what)} detected, converting to USDC…`,
+  paid: (inv, lang) => `💸 <b>${esc(inv.client_name)} paid you ${fmtMoney(inv.amount_cents, inv.currency, lang)}</b>\n${esc(inv.description)}\nThey sent ${esc(inv.paid_with)} · you received ${payoutLabel(inv.payout_chain)} at <code>${esc(inv.payout_address)}</code>.`,
+  paidAgain: (inv) => `💸 Another payment for an invoice that was already paid (${esc(inv.client_name)} · ${esc(inv.description)}): ${esc(inv.paid_with)}. It went to <code>${esc(inv.payout_address)}</code>.`,
+  incoming: (inv, what) => `⏳ <b>${esc(inv.client_name)} is paying</b>: ${esc(what)} detected, converting to ${payoutSymbol(inv.payout_chain)}…`,
   refundedAttempt: (inv, what, reason) => `↩️ A payment attempt from ${esc(inv.client_name)} (${esc(what)}) could not be completed and was refunded to them${reason ? ` (${esc(reason)})` : ''}. The invoice is still open.`,
   btnTx: '🔎 See the transaction',
   overdueAlert: (inv, lang) => `⏰ <b>${esc(inv.client_name)} hasn't paid yet</b>\n${fmtMoney(inv.amount_cents, inv.currency, lang)} · ${esc(inv.description)}\nThe invoice is past its due date. Want me to write a friendly reminder?`,
@@ -69,9 +79,9 @@ const EN = {
     const lines = rows.map((r) => `• ${r.currency}: collected <b>${fmtMoney(r.paid, r.currency, lang)}</b> (${r.paid_n}) · billed ${fmtMoney(r.billed, r.currency, lang)} (${r.billed_n})`);
     return `📊 <b>This month</b>\n\n${lines.join('\n')}${unpaidN ? `\n\n⏳ ${unpaidN} still unpaid.` : ''}`;
   },
-  settings: (u) => `⚙️ <b>Settings</b>\n\nLanguage: ${u.lang === 'es' ? 'Español' : 'English'}\nInvoice currency: ${u.currency} (paid out in USDC)\nNEAR account: ${u.near_account ? `<code>${esc(u.near_account)}</code>` : '—'}\nName on invoices: ${esc(u.business_name || u.first_name || '—')}`,
+  settings: (u) => `⚙️ <b>Settings</b>\n\nLanguage: ${u.lang === 'es' ? 'Español' : 'English'}\nInvoice currency: ${u.currency}\nGet paid in: ${u.payout_address ? `${payoutLabel(u.payout_chain)} · <code>${esc(u.payout_address)}</code>` : '—'}\nName on invoices: ${esc(u.business_name || u.first_name || '—')}`,
   btnLang: '🌐 Español',
-  btnNear: '🟢 NEAR account',
+  btnPayout: '🟢 Where I get paid',
   btnBusiness: '🏷️ Name on invoices',
   askBusiness: 'What name should your clients see on the invoices? (your name or your business)',
   saved: 'Saved ✅',
@@ -88,7 +98,7 @@ const ES = {
   btnHelp: '❓ Cómo funciona',
   btnSettings: '⚙️ Ajustes',
   welcome: (name) => `¡Hola, ${esc(name || '')}! Soy <b>Cobra</b> 🧾🎙️\n\nFacturo a tus clientes y persigo los pagos por ti. Tus clientes pagan con <b>la cripto que tengan, en la red que sea</b> (USDC, USDT, BTC, ETH, SOL, ZEC…) y tú recibes <b>USDC en NEAR</b>, gracias a NEAR Intents.\n\nMándame un audio o un texto como:\n\n<i>«Factura a Marta García 350 euros por el diseño del logo, a pagar en 15 días.»</i>\n\nPrimero te enseño la factura. No se crea nada hasta que pulses ✅.`,
-  help: `<b>Qué hago</b>\n\n🎙️ <b>Mándame un audio o un texto</b> diciendo a quién facturas, cuánto y por qué. Preparo la factura y te la enseño.\n✅ Pulsa <b>Crear</b> y tienes un <b>enlace de pago</b> para mandárselo a tu cliente.\n🌐 Tu cliente paga con lo que tenga: USDC o USDT en casi cualquier red, BTC, ETH, SOL, NEAR, ZEC… NEAR Intents lo convierte y <b>tú recibes USDC en NEAR</b>.\n💸 Te aviso <b>en cuanto te pagan</b>, con la transacción.\n🔔 <b>Quién me debe</b> te enseña lo pendiente; te escribo un recordatorio amable para reenviar.\n📊 <b>Este mes</b>: lo facturado y lo cobrado.\n\nSin conectar carteras ni dar claves: Cobra nunca toca tu dinero.`,
+  help: `<b>Qué hago</b>\n\n🎙️ <b>Mándame un audio o un texto</b> diciendo a quién facturas, cuánto y por qué. Preparo la factura y te la enseño.\n✅ Pulsa <b>Crear</b> y tienes un <b>enlace de pago</b> para mandárselo a tu cliente.\n🌐 Tu cliente paga con lo que tenga: USDC o USDT en casi cualquier red, BTC, ETH, SOL, NEAR, ZEC… NEAR Intents lo convierte y <b>tú recibes USDC en NEAR</b> (o USDC en Arbitrum, o BCH).\n💸 Te aviso <b>en cuanto te pagan</b>, con la transacción.\n🔔 <b>Quién me debe</b> te enseña lo pendiente; te escribo un recordatorio amable para reenviar.\n📊 <b>Este mes</b>: lo facturado y lo cobrado.\n\nSin conectar carteras ni dar claves: Cobra nunca toca tu dinero.`,
   thinking: '🎙️ Escuchando…',
   draftTitle: '🧾 <b>Borrador de factura</b>',
   to: 'Para',
@@ -99,14 +109,16 @@ const ES = {
   btnSend: '✅ Crear enlace de pago',
   btnFix: '✏️ Corregir',
   btnCancel: '❌ Cancelar',
-  askNear: '¿En qué <b>cuenta de NEAR</b> quieres recibir los USDC? Por ejemplo <code>marta.near</code>. Solo te lo pregunto una vez.',
-  badNear: 'No encuentro esa cuenta de NEAR. Revísala y mándamela otra vez, por ejemplo <code>marta.near</code>.',
-  nearSaved: (a) => `✅ Los pagos irán a <code>${esc(a)}</code>.`,
+  settles: (chain) => `Cobras en ${payoutLabel(chain)}`,
+  askPayout: '¿Dónde quieres <b>cobrar</b>? Tus clientes pueden seguir pagando con lo que quieran. Solo te lo pregunto una vez (puedes cambiarlo en ⚙️ Ajustes).',
+  askAddress: (chain) => (chain === 'near' ? 'Mándame tu <b>cuenta de NEAR</b>, por ejemplo <code>marta.near</code>.' : `Mándame tu dirección de <b>${payoutLabel(chain)}</b>, por ejemplo <code>${esc(PAYOUTS[chain].example)}</code>.`),
+  badAddress: (chain) => (chain === 'near' ? 'No encuentro esa cuenta de NEAR. Revísala y mándamela otra vez, por ejemplo <code>marta.near</code>.' : `Eso no parece una dirección de ${PAYOUTS[chain].chainName}. Revísala y mándamela otra vez.`),
+  payoutSaved: (chain, a) => `✅ Cobrarás en <b>${payoutLabel(chain)}</b> en <code>${esc(a)}</code>.`,
   askFix: 'Dime qué cambio (por audio o por texto), por ejemplo «que sean 400» o «que venza el viernes».',
   noClient: '¿A quién facturo? Dime el nombre del cliente, el importe y por qué es.',
   noAmount: (name) => `¿Cuánto le facturo a ${esc(name || 'tu cliente')} y por qué?`,
   tooMuch: (max) => `Supera el límite de ${max} por factura. Corrige el importe y vuelve a intentarlo.`,
-  sent: (inv, lang) => `✅ <b>Enlace de pago listo</b> para ${esc(inv.client_name)}\n${fmtMoney(inv.amount_cents, inv.currency, lang)} · ${esc(inv.description)}\nA: <code>${esc(inv.near_account)}</code>\n\nMándaselo a tu cliente: paga con la cripto que quiera y tú recibes USDC. Te aviso en cuanto te pague.`,
+  sent: (inv, lang) => `✅ <b>Enlace de pago listo</b> para ${esc(inv.client_name)}\n${fmtMoney(inv.amount_cents, inv.currency, lang)} · ${esc(inv.description)}\nA: ${payoutLabel(inv.payout_chain)} · <code>${esc(inv.payout_address)}</code>\n\nMándaselo a tu cliente: paga con la cripto que quiera y tú recibes ${payoutSymbol(inv.payout_chain)}. Te aviso en cuanto te pague.`,
   btnShare: '📤 Mandar al cliente',
   btnPayLink: '🔗 Página de pago',
   btnInPerson: '📱 Cobrar en persona',
@@ -114,9 +126,9 @@ const ES = {
   inPerson: (inv, lang) => `📱 Abre esta página en tu móvil y enséñasela a ${esc(inv.client_name)}. Escanea el QR con su cartera y paga ${fmtMoney(inv.amount_cents, inv.currency, lang)}.`,
   cancelled: 'Borrador descartado. 👍',
   gone: 'Ese borrador ya no está. Mándame uno nuevo.',
-  paid: (inv, lang) => `💸 <b>${esc(inv.client_name)} te ha pagado ${fmtMoney(inv.amount_cents, inv.currency, lang)}</b>\n${esc(inv.description)}\nHa enviado ${esc(inv.paid_with)} · tú has recibido USDC en <code>${esc(inv.near_account)}</code>.`,
-  paidAgain: (inv) => `💸 Ha llegado otro pago de una factura que ya estaba pagada (${esc(inv.client_name)} · ${esc(inv.description)}): ${esc(inv.paid_with)}. Los USDC están en <code>${esc(inv.near_account)}</code>.`,
-  incoming: (inv, what) => `⏳ <b>${esc(inv.client_name)} está pagando</b>: ${esc(what)} detectado, convirtiendo a USDC…`,
+  paid: (inv, lang) => `💸 <b>${esc(inv.client_name)} te ha pagado ${fmtMoney(inv.amount_cents, inv.currency, lang)}</b>\n${esc(inv.description)}\nHa enviado ${esc(inv.paid_with)} · tú has recibido ${payoutLabel(inv.payout_chain)} en <code>${esc(inv.payout_address)}</code>.`,
+  paidAgain: (inv) => `💸 Ha llegado otro pago de una factura que ya estaba pagada (${esc(inv.client_name)} · ${esc(inv.description)}): ${esc(inv.paid_with)}. Ha ido a <code>${esc(inv.payout_address)}</code>.`,
+  incoming: (inv, what) => `⏳ <b>${esc(inv.client_name)} está pagando</b>: ${esc(what)} detectado, convirtiendo a ${payoutSymbol(inv.payout_chain)}…`,
   refundedAttempt: (inv, what, reason) => `↩️ Un intento de pago de ${esc(inv.client_name)} (${esc(what)}) no se ha podido completar y se le ha devuelto${reason ? ` (${esc(reason)})` : ''}. La factura sigue pendiente.`,
   btnTx: '🔎 Ver la transacción',
   overdueAlert: (inv, lang) => `⏰ <b>${esc(inv.client_name)} aún no ha pagado</b>\n${fmtMoney(inv.amount_cents, inv.currency, lang)} · ${esc(inv.description)}\nLa factura ya ha vencido. ¿Te escribo un recordatorio amable?`,
@@ -134,9 +146,9 @@ const ES = {
     const lines = rows.map((r) => `• ${r.currency}: cobrado <b>${fmtMoney(r.paid, r.currency, lang)}</b> (${r.paid_n}) · facturado ${fmtMoney(r.billed, r.currency, lang)} (${r.billed_n})`);
     return `📊 <b>Este mes</b>\n\n${lines.join('\n')}${unpaidN ? `\n\n⏳ ${unpaidN} sin pagar todavía.` : ''}`;
   },
-  settings: (u) => `⚙️ <b>Ajustes</b>\n\nIdioma: ${u.lang === 'es' ? 'Español' : 'English'}\nMoneda de las facturas: ${u.currency} (cobras en USDC)\nCuenta de NEAR: ${u.near_account ? `<code>${esc(u.near_account)}</code>` : '—'}\nNombre en las facturas: ${esc(u.business_name || u.first_name || '—')}`,
+  settings: (u) => `⚙️ <b>Ajustes</b>\n\nIdioma: ${u.lang === 'es' ? 'Español' : 'English'}\nMoneda de las facturas: ${u.currency}\nCobro en: ${u.payout_address ? `${payoutLabel(u.payout_chain)} · <code>${esc(u.payout_address)}</code>` : '—'}\nNombre en las facturas: ${esc(u.business_name || u.first_name || '—')}`,
   btnLang: '🌐 English',
-  btnNear: '🟢 Cuenta de NEAR',
+  btnPayout: '🟢 Dónde cobro',
   btnBusiness: '🏷️ Nombre en las facturas',
   askBusiness: '¿Qué nombre quieres que vean tus clientes en las facturas? (el tuyo o el de tu negocio)',
   saved: 'Guardado ✅',
@@ -149,7 +161,7 @@ const ES = {
 export const T = (lang) => (lang === 'es' ? ES : EN);
 
 /** The invoice draft card. */
-export function draftCard(d, lang) {
+export function draftCard(d, lang, chain = 'near') {
   const t = T(lang);
   const lines = [t.draftTitle, ''];
   lines.push(`${t.to}: <b>${esc(d.client_name || '?')}</b>${d.client_email ? ` · ${esc(d.client_email)}` : ''}`);
@@ -157,7 +169,7 @@ export function draftCard(d, lang) {
   lines.push(`${t.totalL}: <b>${fmtMoney(total(d.items), d.currency, lang)}</b>`);
   lines.push(`${t.due}: ${d.due_date ? fmtDate(d.due_date, lang) : t.onReceipt}`);
   if (d.note) lines.push(`${t.note}: <i>${esc(d.note)}</i>`);
-  lines.push(`🟢 ${t.settles(lang)}`);
+  lines.push(`🟢 ${t.settles(chain)}`);
   return lines.join('\n');
 }
 

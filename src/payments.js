@@ -24,7 +24,7 @@ export function createPayments({ db, intents, api, cfg, clock = Date.now }) {
   /** What the payment page needs to show for a deposit. */
   const view = (d) => ({
     address: d.address, memo: d.memo, symbol: d.symbol, chain: d.chain, chainName: CHAIN_NAMES[d.chain] || d.chain,
-    amountIn: d.amount_in, usdc: (Number(d.usdc) / 1e6).toFixed(2), deadline: d.deadline, status: d.status,
+    amountIn: d.amount_in, deadline: d.deadline, status: d.status,
   });
 
   /** Gets (or reuses) a deposit address so the client can pay `inv` with `assetId`. */
@@ -39,13 +39,13 @@ export function createPayments({ db, intents, api, cfg, clock = Date.now }) {
     if (reuse) return view(reuse);
     if ((await db.depositsFor(inv.id)).length >= MAX_ATTEMPTS) throw new PayError('limit');
 
-    const usdc = await intents.usdcUnits(inv.amount_cents, inv.currency);
+    const amount = await intents.payoutUnits(inv.amount_cents, inv.currency, inv.payout_chain);
     const deadline = now + cfg.quoteMinutes * 60_000;
-    const q = await intents.quote({ originAsset: assetId, symbol: opt.symbol, usdc, recipient: inv.near_account, refundTo: refund, deadline });
+    const q = await intents.quote({ originAsset: assetId, symbol: opt.symbol, amount, payout: inv.payout_chain, recipient: inv.payout_address, refundTo: refund, deadline });
     if (!q.depositAddress) throw new Error('1Click returned no deposit address');
     const dep = {
       address: q.depositAddress, memo: q.depositMemo || null, invoice_id: inv.id, origin_asset: assetId, symbol: opt.symbol, chain: opt.chain,
-      refund_to: refund, amount_in: q.amountInFormatted, usdc, quote: JSON.stringify(q), deadline: Date.parse(q.deadline) || deadline, created_at: now,
+      refund_to: refund, amount_in: q.amountInFormatted, amount_out: amount, quote: JSON.stringify(q), deadline: Date.parse(q.deadline) || deadline, created_at: now,
     };
     await db.addDeposit(dep);
     return view({ ...dep, status: 'PENDING_DEPOSIT' });
