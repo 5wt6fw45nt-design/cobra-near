@@ -235,7 +235,7 @@ test('voice/text → draft → asks where to get paid once → payment link to s
   assert.equal(inv.payout_chain, 'near');
   assert.equal(inv.amount_cents, 35000);
   assert.equal(inv.currency, 'EUR');
-  assert.equal(inv.pay_url, 'https://cobra.test/pay/tok00000000000000000001');
+  assert.equal(inv.pay_url, 'https://cobra.test/pay/tok00000000000000000001?lang=es');
   assert.match(s.last().text, /Enlace de pago listo/);
   const share = s.buttons().find((b) => b.url?.startsWith('https://t.me/share/url'));
   assert.ok(share, 'share button');
@@ -368,7 +368,7 @@ test('reminder: written by AI, forwarded with the payment link; get paid in pers
   assert.match(s.last().text, /recordada/);
   await s.tap('qr:1');
   assert.match(s.last().text, /enséñasela a Marta García/);
-  assert.equal(s.buttons()[0].url, 'https://cobra.test/pay/tok00000000000000000001');
+  assert.equal(s.buttons()[0].url, 'https://cobra.test/pay/tok00000000000000000001?lang=es');
 });
 
 test('the clock follows payments every minute and warns once about overdue invoices', async () => {

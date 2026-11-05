@@ -69,7 +69,7 @@ export function createBot({ api, db, cfg, payments, intents, concordium = null, 
     const inv = {
       user_id: u.id, pay_token: payToken, number: String((await db.countInvoices(u.id)) + 1).padStart(4, '0'),
       client_name: d.client_name, client_email: d.client_email, description: describe(d.items), amount_cents: total(d.items), currency: d.currency,
-      payout_chain: u.payout_chain, payout_address: u.payout_address, due_date: d.due_date, pay_url: `${cfg.publicUrl}/pay/${payToken}`, created_at: now,
+      payout_chain: u.payout_chain, payout_address: u.payout_address, due_date: d.due_date, pay_url: `${cfg.publicUrl}/pay/${payToken}?lang=${u.lang === 'es' ? 'es' : 'en'}`, created_at: now, // the page opens in the language the invoice was made in
     };
     const id = await db.addInvoice(inv);
     await db.saveClient(u.id, d.client_name, d.client_email, now);
