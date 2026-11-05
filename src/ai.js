@@ -48,7 +48,8 @@ Return ONLY JSON:
  "due_days": number of days to pay if said ("en 15 días", "net 30"), else null,
  "due_date": "YYYY-MM-DD if they said a date ('before Friday', 'el 30 de noviembre'), else null",
  "note": "message to the client if they dictated one, else null",
- "reply": "only for chat: one or two friendly sentences in the user's language; never invent facts"}
+ "reply": "only for chat: one or two friendly sentences in the user's language; never invent facts",
+ "lang": "es" if this message is in Spanish, "en" if it is in English}
 Rules:
 - Several things for the same client are several items. "two hours at 40" → {"amount": 40, "qty": 2}.
 - Numbers said in words become numbers ("trescientos cincuenta" → 350, "one fifty" → 150).
@@ -118,7 +119,8 @@ export async function understand(ai, text, ctx) {
     const d = await askJson(ai, SYSTEM(ctx), text);
     if (!d) return null;
     const intent = ['invoice', 'debtors', 'summary', 'help', 'chat'].includes(d.intent) ? d.intent : 'chat';
-    return { intent, draft: intent === 'invoice' ? normalizeDraft(d, ctx) : null, reply: String(d.reply || '').slice(0, 400) };
+    const lang = ['es', 'en'].includes(d.lang) ? d.lang : null; // the bot answers (and links) in the language of this message
+    return { intent, draft: intent === 'invoice' ? normalizeDraft(d, ctx) : null, reply: String(d.reply || '').slice(0, 400), lang };
   } catch (e) {
     console.error('[understand]', e.message);
     return null;

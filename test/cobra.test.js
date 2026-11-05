@@ -803,3 +803,13 @@ test('Lightning invoices: fresh BOLT11 per attempt, ecash pays it, the freelance
   const again = await (await call(`/pay/${inv.pay_token}/cashu`, { method: 'POST', body: JSON.stringify({ key: d.key, token: 'cashuBxyz' }) })).json();
   assert.equal(again.paid, false, 'a paid invoice is not paid twice');
 });
+
+test('the bot follows the language of the message: an English voice note gets English replies and an English payment page', async () => {
+  const s = setup();
+  const nluEn = async (_ai, text, ctx) => ({ ...(await fakeNlu(_ai, text, ctx)), lang: /bill/i.test(text) ? 'en' : null });
+  const bot = createBot({ api: s.api, db: s.db, cfg: s.cfg, payments: s.payments, intents: s.intents, clock: () => T0, nlu: nluEn, token: () => 'tokEN0000000000000000001' });
+  const from = { id: s.ME, first_name: 'Augusto', language_code: 'es' };
+  await bot.handleUpdate({ message: { from, chat: { id: s.ME, type: 'private' }, text: 'Bill Marta 5 dollars for the logo' } });
+  assert.match(s.last().text, /Invoice draft/);
+  assert.equal((await s.db.getUser(s.ME)).lang, 'en');
+});
