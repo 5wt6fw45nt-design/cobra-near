@@ -70,6 +70,7 @@ export function payPage({ token, invoice, options, lang, badge = null }) {
   .badge { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--ink); text-decoration:none; background:var(--card); border:1px solid var(--line); border-radius:999px; padding:7px 12px; width:max-content; max-width:100%; }
   .badge::before { content:'✓'; display:inline-grid; place-items:center; width:18px; height:18px; border-radius:50%; background:var(--accent); color:var(--accent-ink); font-size:12px; }
   .badge small { color:var(--soft); font-weight:400; overflow:hidden; text-overflow:ellipsis; }
+  .badge.hidden { display:none; }
 </style>
 </head>
 <body>
